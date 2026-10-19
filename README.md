@@ -1,21 +1,40 @@
 # 听歌统计 · Salt Player for Windows 插件
 
-Listen Stats — a local-only listening statistics plugin for **Salt Player for Windows (SPW)**.
+> **本插件 100% 由 AI 生成。**
 
-> 记录你听了多少次、听了多久、什么时候听、最爱听什么；全部数据保存在本地，无网络请求。
+记录你听了多少次、听了多久、什么时候听、最爱听什么。全部数据保存在本地，无网络请求。
 
 ---
 
-## 功能
+## 界面
 
-### 面板（右下角圆形浮钮打开）
+### 概览
 
-| 页签 | 内容 |
-|---|---|
-| **概览** | 总播放次数 / 累计收听 / 曲目数 / 连续收听天数；最常听 Top 5、最近播放（带封面） |
-| **排行** | 总榜 / 月榜 / 周榜 × 歌曲 / 专辑 / 艺术家 × 次数 / 最近 / 时长；三列表均显示封面，点歌曲可看历史播放记录 |
-| **活跃度** | GitHub 风格年度热力图（点击格子看当天明细）+ 收听时段柱状图（日/周/月/年粒度、次数/时长、日历选日期、周视图按天分层着色） |
-| **信息** | 插件与宿主环境、采集状态、数据占用、权限状态；可调整「明细保留天数」 |
+总播放次数、累计收听时长、曲目数、连续收听天数，以及最常听 Top 5 与最近播放（含封面）。
+
+<img src="docs/screenshots/overview.png" width="100%" alt="概览页">
+
+### 排行
+
+总榜 / 月榜 / 周榜 × 歌曲 / 专辑 / 艺术家 × 次数 / 最近 / 时长；列表显示封面，点歌曲可看历史播放记录。
+
+<img src="docs/screenshots/ranking.png" width="100%" alt="排行页">
+
+### 活跃度
+
+GitHub 风格年度热力图（点击格子查看当天明细），以及收听时段柱状图（日 / 周 / 月 / 年粒度、次数 / 时长切换、日历选日期、周视图按天分层着色）。
+
+<img src="docs/screenshots/activity.png" width="100%" alt="活跃度页">
+
+### 信息
+
+插件与宿主环境、采集状态、数据占用、权限状态；可调整「明细保留天数」。
+
+<img src="docs/screenshots/info.png" width="100%" alt="信息页">
+
+---
+
+## 功能说明
 
 ### 采集规则
 
@@ -36,7 +55,7 @@ Listen Stats — a local-only listening statistics plugin for **Salt Player for 
 
 ### 其他
 
-- 浮钮可拖动，位置记忆；拖到边缘会自动贴边隐藏
+- 浮钮可拖动，位置记忆；拖到边缘会自动贴边隐藏；拖动不会误触打开面板
 - 按 `Esc` 逐层退出（先关弹层，再关面板）
 - 面板下沿留空，避开迷你播放条
 - 跟随宿主深色/浅色主题；支持 SPW 壁纸背景
@@ -100,10 +119,11 @@ com.spwmods.waerwak.listenstats
 
 需要 JDK 21+ 与 Gradle 8.x。
 
-1. 在 `gradle.properties` 里把 `spwHostJar` 指向本机 SPW 安装目录下的 fat jar：
-   ```properties
-   spwHostJar=D:/Games/Steam/Steam/steamapps/common/Salt Player for Windows/app/ffmpeg-x64.dll
+1. 复制配置模板并按本机环境填写：
+   ```bash
+   cp gradle.properties.example gradle.properties
    ```
+   把 `spwHostJar` 指向本机 SPW 安装目录下的 fat jar（Steam 版是 `app/ffmpeg-x64.dll`）。
 2. 构建：
    ```bash
    gradle build
@@ -141,14 +161,6 @@ src/main/kotlin/com/spwmods/waerwak/listenstats/
     ├── CoverCache.kt           封面缩略图缓存（LRU + 128px 降采样）
     └── UiStateStore.kt         浮钮位置持久化
 ```
-
----
-
-## English
-
-Listen Stats is a local-only statistics plugin for Salt Player for Windows. It tracks play counts, listening time and skips, and presents them in an in-app overlay with an overview dashboard, rankings (weekly / monthly / all-time), a GitHub-style activity heatmap, and an hourly listening distribution chart.
-
-All data stays on your machine under `%APPDATA%\Salt Player for Windows\workshop\data\com.spwmods.waerwak.listenstats`. No network requests are made.
 
 ---
 
