@@ -20,8 +20,13 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
@@ -86,6 +91,7 @@ import com.spwmods.waerwak.listenstats.ui.SaltDarkPalette
 import com.spwmods.waerwak.listenstats.ui.SaltDesign
 import com.spwmods.waerwak.listenstats.ui.UiStateStore
 import com.spwmods.waerwak.listenstats.ui.WallpaperLoader
+import com.spwmods.waerwak.listenstats.ui.BackdropCapture
 import com.spwmods.waerwak.listenstats.ui.rememberCover
 import com.spwmods.waerwak.listenstats.ui.SaltLightPalette
 import com.xuncorp.spw.workshop.api.PluginPermission
@@ -405,6 +411,8 @@ private fun OverlayHost() {
                     OverlayInjection.panelOpen.value = false
                     // 关闭时同时复位 hover，否则圆钮会卡在“已弹出”状态
                     hovered = false
+                    // 下次打开重新抓一张背景底图（窗口内容可能已变化）
+                    BackdropCapture.reset()
                 })
             } else {
                 // ❗ 关键：未打开时不能有任何不透明背景，否则会盖住宿主页面
@@ -412,7 +420,11 @@ private fun OverlayHost() {
                     EdgeEntry(
                         hovered = hovered,
                         onHoverChange = { hovered = it },
-                        onClick = { OverlayInjection.panelOpen.value = true }
+                        onClick = {
+                            // 必须在面板出现之前截图，否则会把面板自己拍进去
+                            BackdropCapture.captureIfNeeded()
+                            OverlayInjection.panelOpen.value = true
+                        }
                     )
                 }
             }
@@ -687,8 +699,23 @@ private fun StatsOverlay(onClose: () -> Unit) {
                 }
             }
     ) {
+    // 背景优先级：磨砂底图（被模糊的宿主窗口） > 壁纸 > 纯色
+    val backdrop = remember { BackdropCapture.bitmap }
     val wallpaper = remember { WallpaperLoader.load() }
-    if (wallpaper != null) {
+    if (backdrop != null) {
+        Box(
+            Modifier.fillMaxSize().drawBehind {
+                drawImage(
+                    image = backdrop,
+                    dstSize = IntSize(size.width.toInt(), size.height.toInt())
+                )
+            }
+        )
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = if (LocalSaltPalette.current.isDark) Color(0xD11E262D) else Color(0xD1FAFAFA)
+        ) {}
+    } else if (wallpaper != null) {
         Box(
             Modifier.fillMaxSize().drawBehind {
                 drawImage(
@@ -699,7 +726,7 @@ private fun StatsOverlay(onClose: () -> Unit) {
         )
         Surface(
             modifier = Modifier.fillMaxSize(),
-            color = if (LocalSaltPalette.current.isDark) Color(0xD90B0E14) else Color(0xD9FAFAFA)
+            color = if (LocalSaltPalette.current.isDark) Color(0xD11E262D) else Color(0xD1FAFAFA)
         ) {}
     }
     // 底部留 76dp：避开浮动胶囊迷你播放条（面板内容不被遮挡）
@@ -1125,6 +1152,8 @@ private fun RankingTab(tick: Int) {
     var songsPage by remember { mutableStateOf(0) }
     var albumsPage by remember { mutableStateOf(0) }
     var artistsPage by remember { mutableStateOf(0) }
+    val searchState = remember { TextFieldState("") }
+    val query = searchState.text.toString()
     val today = LocalDate.now()
     val sinceDate: String? = when (range) {
         1 -> today.minusDays(30).toString()
@@ -1133,12 +1162,16 @@ private fun RankingTab(tick: Int) {
     }
 
     Column(Modifier.fillMaxWidth()) {
-        // 上排：榜单切换（居中，占 3/5 宽度）
-        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            Row(Modifier.fillMaxWidth(0.6f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // 上排：榜单切换（3/5）+ 搜索框（2/5）
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.weight(3f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 RangeTab("总榜", range == 0, Modifier.weight(1f)) { range = 0; songsPage = 0; albumsPage = 0; artistsPage = 0 }
                 RangeTab("月榜", range == 1, Modifier.weight(1f)) { range = 1; songsPage = 0; albumsPage = 0; artistsPage = 0 }
                 RangeTab("周榜", range == 2, Modifier.weight(1f)) { range = 2; songsPage = 0; albumsPage = 0; artistsPage = 0 }
+            }
+            Spacer(Modifier.width(10.dp))
+            Box(Modifier.weight(2f)) {
+                SearchField(searchState)
             }
         }
         Spacer(Modifier.height(10.dp))
@@ -1158,11 +1191,68 @@ private fun RankingTab(tick: Int) {
         }
         Spacer(Modifier.height(10.dp))
         when (kind) {
-            0 -> TrackListView(songsPage, tick, sortBy, sinceDate, "") { songsPage = it }
-            1 -> AggregateListView(true, albumsPage, tick, sinceDate, "") { albumsPage = it }
-            else -> AggregateListView(false, artistsPage, tick, sinceDate, "") { artistsPage = it }
+            0 -> TrackListView(songsPage, tick, sortBy, sinceDate, query) { songsPage = it }
+            1 -> AggregateListView(true, albumsPage, tick, sinceDate, query) { albumsPage = it }
+            else -> AggregateListView(false, artistsPage, tick, sinceDate, query) { artistsPage = it }
         }
     }
+}
+
+/** 搜索框（Material3 OutlinedTextField + 新版 TextFieldState，支持中文输入法） */
+@Composable
+private fun SearchField(state: TextFieldState) {
+    val p = LocalSaltPalette.current
+    Surface(shape = SaltDesign.shapeMedium, color = p.subBackground, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().height(38.dp).padding(start = 10.dp, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            SearchGlyph(p.subText)
+            Spacer(Modifier.width(6.dp))
+            OutlinedTextField(
+                state = state,
+                modifier = Modifier.weight(1f),
+                lineLimits = TextFieldLineLimits.SingleLine,
+                contentPadding = PaddingValues(0.dp),
+                textStyle = androidx.compose.ui.text.TextStyle(
+                    fontSize = SaltDesign.fontSizeSub,
+                    color = p.text
+                ),
+                placeholder = {
+                    Text("搜索歌曲/歌手/专辑", fontSize = SaltDesign.fontSizeSub, color = p.subText)
+                },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    focusedBorderColor = Color.Transparent,
+                    unfocusedBorderColor = Color.Transparent,
+                    cursorColor = p.highlight,
+                    focusedTextColor = p.text,
+                    unfocusedTextColor = p.text,
+                    focusedPlaceholderColor = p.subText,
+                    unfocusedPlaceholderColor = p.subText
+                )
+            )
+        }
+    }
+}
+
+/** 放大镜图标 */
+@Composable
+private fun SearchGlyph(color: Color) {
+    Box(
+        Modifier.size(13.dp).drawBehind {
+            val s = size.minDimension
+            val w = s * 0.12f
+            drawCircle(
+                color,
+                radius = s * 0.30f,
+                center = Offset(s * 0.42f, s * 0.42f),
+                style = Stroke(width = w)
+            )
+            drawLine(color, Offset(s * 0.63f, s * 0.63f), Offset(s * 0.95f, s * 0.95f), strokeWidth = w)
+        }
+    )
 }
 
 /** 榜单切换按钮（Tab 卡片样式，无图标） */

@@ -314,6 +314,7 @@ object StatsStore {
         return "已恢复 " + restored + " 个文件（原数据已改名为 .bak 保留）"
     }
 
+
     /** 存储占用摘要（聚合 / 明细 / 字典） */
     @Synchronized
     fun storageSummary(): String {
@@ -862,8 +863,24 @@ object StatsStore {
         }
         dayAgg.count += count
         dayAgg.listenedMs += ms
-        if (hour >= 0 && hour < 24) {
-            dayAgg.hours[hour] += 1
+        // 次数归开始小时；时长若带小时分布（hs）则按段累加，否则退化为全部计入开始小时
+        if (hour >= 0 && hour < 24) dayAgg.hours[hour] += 1
+        val hourSpan = JsonLite.string(line, "hs")
+        if (hourSpan.isNotEmpty()) {
+            var idx = 0
+            while (idx < hourSpan.length) {
+                val comma = hourSpan.indexOf(',', idx)
+                val end = if (comma < 0) hourSpan.length else comma
+                val token = hourSpan.substring(idx, end)
+                val colon = token.indexOf(':')
+                if (colon > 0) {
+                    val h = token.substring(0, colon).toIntOrNull() ?: -1
+                    val partMs = token.substring(colon + 1).toLongOrNull() ?: 0L
+                    if (h >= 0 && h < 24 && partMs > 0L) dayAgg.hoursMs[h] += partMs
+                }
+                idx = end + 1
+            }
+        } else if (hour >= 0 && hour < 24) {
             dayAgg.hoursMs[hour] += ms
         }
 
@@ -986,7 +1003,8 @@ object StatsStore {
 
     /** 一行聚合记录（约 90 字节，不含标题等元信息） */
     private fun buildDailyLine(date: String, key: String, hour: Int, event: PlayEvent): String {
-        val sb = StringBuilder(128)
+        val startMs = if (event.ms > 0L && event.ms <= event.t) event.t - event.ms else event.t
+        val sb = StringBuilder(160)
         sb.append('{')
         sb.append("\"d\":\"").append(date).append("\",")
         sb.append("\"k\":\"").append(key).append("\",")
@@ -994,9 +1012,54 @@ object StatsStore {
         sb.append("\"ms\":").append(event.ms).append(',')
         sb.append("\"sk\":").append(if (event.skipped) 1 else 0).append(',')
         sb.append("\"hr\":").append(hour).append(',')
+        // 时长按小时边界切分后的分布（稀疏）："20:360000,21:120000"
+        val span = StringBuilder(32)
+        splitByHour(startMs, event.ms) { partHour, partMs ->
+            if (partHour >= 0 && partHour < 24 && partMs > 0L) {
+                if (span.isNotEmpty()) span.append(',')
+                span.append(partHour).append(':').append(partMs)
+            }
+        }
+        sb.append("\"hs\":\"").append(span).append("\",")
         sb.append("\"lt\":").append(event.t)
         sb.append('}')
         return sb.toString()
+    }
+
+    /**
+     * 把一段收听时长按小时边界切开
+     *
+     * 例：20:55 开始听 8 分钟 → 20 点计入 5 分钟、21 点计入 3 分钟。
+     * 跨午夜时多出的部分仍归到调用方指定的那一天（保证内存与磁盘记录一致）。
+     */
+    private fun splitByHour(startMs: Long, durationMs: Long, onPart: (hour: Int, ms: Long) -> Unit) {
+        if (durationMs <= 0L) return
+        var cursor = startMs
+        var remain = durationMs
+        var guard = 0
+        while (remain > 0L && guard < 26) {
+            val zdt = try {
+                java.time.Instant.ofEpochMilli(cursor).atZone(java.time.ZoneId.systemDefault())
+            } catch (t: Throwable) {
+                onPart(0, remain)
+                return
+            }
+            val hour = zdt.hour
+            val hourEnd = zdt.truncatedTo(java.time.temporal.ChronoUnit.HOURS)
+                .plusHours(1)
+                .toInstant()
+                .toEpochMilli()
+            if (hourEnd <= cursor) {
+                onPart(hour, remain)
+                return
+            }
+            val part = if (hourEnd - cursor < remain) hourEnd - cursor else remain
+            onPart(hour, part)
+            cursor += part
+            remain -= part
+            guard++
+        }
+        if (remain > 0L) onPart(23, remain)
     }
 
     private fun applyToMemory(event: PlayEvent) {
@@ -1021,7 +1084,8 @@ object StatsStore {
         if (event.t > agg.lastPlayed) agg.lastPlayed = event.t
 
         val day = dayFormat.format(Date(event.t))
-        val hour = hourFormat.format(Date(event.t)).toIntOrNull() ?: 0
+        val startMs = if (event.ms > 0L && event.ms <= event.t) event.t - event.ms else event.t
+        val startHour = hourFormat.format(Date(startMs)).toIntOrNull() ?: 0
 
         var dayAgg = days[day]
         if (dayAgg == null) {
@@ -1030,9 +1094,10 @@ object StatsStore {
         }
         if (event.counted) dayAgg.count++
         dayAgg.listenedMs += event.ms
-        if (hour >= 0 && hour < 24) {
-            dayAgg.hours[hour] += 1
-            dayAgg.hoursMs[hour] += event.ms
+        // 次数归开始小时；时长按小时边界切分后分别累加
+        if (startHour >= 0 && startHour < 24) dayAgg.hours[startHour] += 1
+        splitByHour(startMs, event.ms) { partHour, partMs ->
+            if (partHour >= 0 && partHour < 24 && partMs > 0L) dayAgg.hoursMs[partHour] += partMs
         }
 
         var perDay = dayTracks[day]

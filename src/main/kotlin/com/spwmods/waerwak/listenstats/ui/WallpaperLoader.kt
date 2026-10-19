@@ -34,11 +34,8 @@ object WallpaperLoader {
         if (attempted) return cached
         attempted = true
         return try {
-            val enabled = AppConfig.wallpaperMaterial
-            if (!enabled) {
-                lastDiagnostics = "未启用壁纸材质"
-                return null
-            }
+            // 只看文件，不强依赖 wallpaperMaterial：SPW 的「亚克力/云母」样式下
+            // 该开关与壁纸文件无关，强行判断会导致永远读不到壁纸
             val path = AppConfig.wallpaperFilePath
             if (path.isNullOrBlank()) {
                 lastDiagnostics = "壁纸路径为空"
