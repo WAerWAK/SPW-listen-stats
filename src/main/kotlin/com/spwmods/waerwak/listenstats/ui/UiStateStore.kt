@@ -19,12 +19,32 @@ object UiStateStore {
     @Volatile
     private var entryY: Float = 0f
 
+    /** 磨砂背景模糊强度（dp） */
+    @Volatile
+    private var backdropBlurDp: Int = 48
+
     @Volatile
     private var loaded = false
 
     /** 返回 (dx, dy)，相对右下角默认位置的偏移（单位：px） */
     fun loadEntryOffset(): Pair<Float, Float> {
-        if (loaded) return entryX to entryY
+        ensureLoaded()
+        return entryX to entryY
+    }
+
+    /** 磨砂背景模糊强度（dp）；未设置时为 48 */
+    fun loadBackdropBlur(): Int {
+        ensureLoaded()
+        return backdropBlurDp
+    }
+
+    fun saveBackdropBlur(dp: Int) {
+        backdropBlurDp = dp
+        writeAll()
+    }
+
+    private fun ensureLoaded() {
+        if (loaded) return
         loaded = true
         try {
             val dir = StatsStore.dataDirOrNull()
@@ -34,25 +54,32 @@ object UiStateStore {
                     val text = file.readText()
                     val mx = Regex("\"entryX\"\\s*:\\s*(-?[0-9.eE+]+)").find(text)
                     val my = Regex("\"entryY\"\\s*:\\s*(-?[0-9.eE+]+)").find(text)
+                    val mb = Regex("\"blurDp\"\\s*:\\s*([0-9]+)").find(text)
                     if (mx != null) mx.groupValues[1].toFloatOrNull()?.let { entryX = it }
                     if (my != null) my.groupValues[1].toFloatOrNull()?.let { entryY = it }
+                    if (mb != null) mb.groupValues[1].toIntOrNull()?.let { backdropBlurDp = it }
                 }
             }
         } catch (t: Throwable) {
-            // 读取失败就用默认位置
+            // 读取失败就用默认值
         }
-        return entryX to entryY
     }
 
     fun saveEntryOffset(x: Float, y: Float) {
         entryX = x
         entryY = y
+        writeAll()
+    }
+
+    private fun writeAll() {
         try {
             val dir = StatsStore.dataDirOrNull() ?: return
             if (!dir.isDirectory) dir.mkdirs()
-            File(dir, FILE_NAME).writeText("{\"entryX\":" + x + ",\"entryY\":" + y + "}")
+            File(dir, FILE_NAME).writeText(
+                "{\"entryX\":" + entryX + ",\"entryY\":" + entryY + ",\"blurDp\":" + backdropBlurDp + "}"
+            )
         } catch (t: Throwable) {
-            // 写入失败忽略，下次拖动会再试
+            // 写入失败忽略，下次修改会再试
         }
     }
 }

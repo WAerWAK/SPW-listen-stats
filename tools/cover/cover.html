@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  @font-face {
+    font-family: 'CoverFont';
+    src: url('lxgw.ttf') format('truetype');
+    font-weight: 300 700;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1024px; height: 1024px; overflow: hidden; }
+
+  body {
+    font-family: 'CoverFont', 'Microsoft YaHei UI', sans-serif;
+    background: #0A0E12;
+    position: relative;
+    color: #F2F7FA;
+  }
+
+  /* 背景：对角渐变 + 蓝光晕 + 细网格 */
+  .bg {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(circle at 76% 18%, rgba(76,194,255,0.20), transparent 55%),
+      radial-gradient(circle at 12% 88%, rgba(76,194,255,0.10), transparent 50%),
+      linear-gradient(150deg, #0B1015 0%, #131A21 45%, #1B242C 100%);
+  }
+  .grid {
+    position: absolute; inset: 0;
+    background-image:
+      repeating-linear-gradient(0deg, rgba(255,255,255,0.028) 0 1px, transparent 1px 64px),
+      repeating-linear-gradient(90deg, rgba(255,255,255,0.028) 0 1px, transparent 1px 64px);
+    mask-image: radial-gradient(circle at 50% 45%, #000 20%, transparent 78%);
+  }
+
+  .wrap {
+    position: absolute; inset: 0;
+    padding: 76px 78px;
+    display: flex; flex-direction: column;
+  }
+
+  /* 顶部标签 */
+  .eyebrow {
+    display: flex; align-items: center; gap: 16px;
+    font-size: 19px; letter-spacing: 0.26em;
+    color: rgba(242,247,250,0.42);
+    text-transform: uppercase;
+  }
+  .eyebrow .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: #4CC2FF;
+    box-shadow: 0 0 18px 3px rgba(76,194,255,0.65);
+  }
+  .eyebrow .bar { flex: 1; height: 1px; background: rgba(255,255,255,0.10); }
+
+  /* 主标题区 */
+  .title-block { margin-top: 84px; }
+  .title {
+    font-size: 146px;
+    font-weight: 500;
+    line-height: 1.06;
+    letter-spacing: 0.005em;
+    background: linear-gradient(180deg, #FFFFFF 20%, #B9D9EC 100%);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .subtitle {
+    margin-top: 24px;
+    font-size: 31px;
+    letter-spacing: 0.34em;
+    color: #4CC2FF;
+    font-weight: 500;
+  }
+  .desc {
+    margin-top: 26px;
+    font-size: 25px;
+    color: rgba(242,247,250,0.52);
+    letter-spacing: 0.04em;
+  }
+
+  /* 可视化卡片 */
+  .viz {
+    margin-top: auto;
+    margin-bottom: 46px;
+    display: flex; gap: 22px;
+    height: 250px;
+  }
+  .panel {
+    background: rgba(255,255,255,0.045);
+    border: 1px solid rgba(255,255,255,0.085);
+    border-radius: 26px;
+    padding: 28px 30px;
+    display: flex; flex-direction: column;
+    justify-content: space-between;
+    position: relative;
+    overflow: hidden;
+  }
+  .panel .cap {
+    font-size: 17px; letter-spacing: 0.18em;
+    color: rgba(242,247,250,0.40);
+    text-transform: uppercase;
+  }
+
+  .heat { flex: 1.35; }
+  .heat-grid {
+    display: grid;
+    grid-template-columns: repeat(24, 1fr);
+    gap: 8px;
+  }
+  .cell { aspect-ratio: 1; border-radius: 3px; }
+
+  .bars { flex: 1; }
+  .bar-area {
+    flex: 1;
+    display: flex; align-items: flex-end; gap: 13px;
+    padding-top: 6px;
+  }
+  .bar {
+    flex: 1; border-radius: 6px 6px 3px 3px;
+    background: linear-gradient(180deg, #7FD4FF 0%, #4CC2FF 55%, rgba(76,194,255,0.35) 100%);
+  }
+  .bar.dim {
+    background: linear-gradient(180deg, rgba(140,180,205,0.55) 0%, rgba(140,180,205,0.20) 100%);
+  }
+
+  /* 底部信息 */
+  .foot {
+    display: flex; align-items: center; gap: 22px;
+    font-size: 21px;
+    color: rgba(242,247,250,0.42);
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+  .foot span { flex-shrink: 0; white-space: nowrap; }
+  .foot .sep { width: 5px; height: 5px; border-radius: 50%; background: rgba(76,194,255,0.55); }
+  .foot .id { margin-left: auto; font-size: 15px; color: rgba(242,247,250,0.24); letter-spacing: 0.02em; }
+</style>
+</head>
+<body>
+  <div class="bg"></div>
+  <div class="grid"></div>
+
+  <div class="wrap">
+    <div class="eyebrow">
+      <span class="dot"></span>
+      <span>Salt Player for Windows</span>
+      <span class="bar"></span>
+      <span>Workshop Plugin</span>
+    </div>
+
+    <div class="title-block">
+      <div class="title">听歌统计</div>
+      <div class="subtitle">LISTEN STATS</div>
+      <div class="desc">记录每一次倾听 · 概览 / 排行 / 活跃度</div>
+    </div>
+
+    <div class="viz">
+      <div class="panel heat">
+        <div class="cap">Listening · 365 days</div>
+        <div class="heat-grid" id="heat"></div>
+      </div>
+      <div class="panel bars">
+        <div class="cap">Top Tracks</div>
+        <div class="bar-area" id="bars"></div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <span>播放次数</span>
+      <span class="sep"></span>
+      <span>收听时长</span>
+      <span class="sep"></span>
+      <span>跳过统计</span>
+      <span class="sep"></span>
+      <span>本地存储</span>
+      <span class="id">com.spwmods.waerwak.listenstats</span>
+    </div>
+  </div>
+
+<script>
+  // 固定种子，保证每次生成的图完全一致
+  let seed = 20261019;
+  function rnd() {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  }
+
+  // 热力图：20 列 × 7 行，蓝度随机（模拟 GitHub 风格）
+  const heat = document.getElementById('heat');
+  const levels = ['rgba(255,255,255,0.055)', 'rgba(76,194,255,0.20)', 'rgba(76,194,255,0.38)', 'rgba(76,194,255,0.62)', 'rgba(120,212,255,0.95)'];
+  for (let r = 0; r < 7; r++) {
+    for (let c = 0; c < 24; c++) {
+      const d = document.createElement('div');
+      d.className = 'cell';
+      const t = rnd();
+      let idx = 0;
+      if (t > 0.82) idx = 4; else if (t > 0.62) idx = 3; else if (t > 0.42) idx = 2; else if (t > 0.22) idx = 1;
+      d.style.background = levels[idx];
+      heat.appendChild(d);
+    }
+  }
+
+  // 柱状图：降序，最后两根弱化
+  const bars = document.getElementById('bars');
+  const heights = [0.98, 0.80, 0.66, 0.54, 0.44, 0.34, 0.24, 0.14];
+  heights.forEach((h, i) => {
+    const b = document.createElement('div');
+    b.className = 'bar' + (i >= 6 ? ' dim' : '');
+    b.style.height = (h * 100) + '%';
+    bars.appendChild(b);
+  });
+</script>
+</body>
+</html>

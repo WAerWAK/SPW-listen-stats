@@ -92,6 +92,7 @@ import com.spwmods.waerwak.listenstats.ui.SaltDesign
 import com.spwmods.waerwak.listenstats.ui.UiStateStore
 import com.spwmods.waerwak.listenstats.ui.WallpaperLoader
 import com.spwmods.waerwak.listenstats.ui.BackdropCapture
+import com.spwmods.waerwak.listenstats.ui.HostFont
 import com.spwmods.waerwak.listenstats.ui.rememberCover
 import com.spwmods.waerwak.listenstats.ui.SaltLightPalette
 import com.xuncorp.spw.workshop.api.PluginPermission
@@ -122,6 +123,13 @@ object OverlayInjection {
 
     /** 面板开关状态（提到 object 级，快捷键才能切换） */
     val panelOpen = mutableStateOf(false)
+
+    /**
+     * 面板内容区在窗口内的几何范围（像素）。
+     * 用于判断鼠标点击是否落在面板外侧（左侧导航栏 / 标题栏），点击外侧时自动关闭面板。
+     */
+    @Volatile
+    var contentBoundsInWindow: java.awt.Rectangle? = null
 
     /** 配置页请求打开面板时指定的初始页（-1 表示不指定） */
     val pendingTab = mutableStateOf(-1)
@@ -398,22 +406,69 @@ private fun OverlayHost() {
     var hovered by remember { mutableStateOf(false) }
     val opened = OverlayInjection.panelOpen.value
 
-    // 同步宿主的深浅色
+    // 关闭面板（含浮钮状态与背景底图的复位）
+    val closePanel: () -> Unit = {
+        OverlayInjection.panelOpen.value = false
+        hovered = false
+        BackdropCapture.reset()
+    }
+
+    // 面板打开时：点击内容区之外（左侧导航栏等）自动关闭面板。
+    // 宿主切换页面后重新打开面板时会重新截图，背景自然跟随新页面。
+    DisposableEffect(opened) {
+        if (!opened) {
+            return@DisposableEffect onDispose { }
+        }
+        val listener = java.awt.event.AWTEventListener { event ->
+            if (event is java.awt.event.MouseEvent &&
+                event.id == java.awt.event.MouseEvent.MOUSE_PRESSED &&
+                event.button == java.awt.event.MouseEvent.BUTTON1
+            ) {
+                val bounds = OverlayInjection.contentBoundsInWindow
+                val window = BackdropCapture.hostWindow()
+                if (bounds != null && window != null) {
+                    val origin = window.locationOnScreen
+                    val wx = event.xOnScreen - origin.x
+                    val wy = event.yOnScreen - origin.y
+                    val outside = wx < bounds.x ||
+                        wy < bounds.y ||
+                        wx > bounds.x + bounds.width ||
+                        wy > bounds.y + bounds.height
+                    if (outside) {
+                        closePanel()
+                    }
+                }
+            }
+        }
+        try {
+            java.awt.Toolkit.getDefaultToolkit().addAWTEventListener(
+                listener,
+                java.awt.AWTEvent.MOUSE_EVENT_MASK
+            )
+        } catch (t: Throwable) {
+            // 无 GUI 环境或权限不足：忽略，退化为只能手动关闭
+        }
+        onDispose {
+            try {
+                java.awt.Toolkit.getDefaultToolkit().removeAWTEventListener(listener)
+            } catch (t: Throwable) {
+                // 忽略
+            }
+        }
+    }
+
+    // 同步宿主的深浅色与字体
     val dark = HostAppearance.isDarkTheme()
     val palette = if (dark) SaltDarkPalette else SaltLightPalette
+    val hostFont = remember { HostFont.family() }
 
     MaterialTheme(colorScheme = darkColorScheme(primary = palette.highlight)) {
         CompositionLocalProvider(
-            LocalSaltPalette provides palette
+            LocalSaltPalette provides palette,
+            LocalTextStyle provides androidx.compose.ui.text.TextStyle(fontFamily = hostFont)
         ) {
             if (opened) {
-                StatsOverlay(onClose = {
-                    OverlayInjection.panelOpen.value = false
-                    // 关闭时同时复位 hover，否则圆钮会卡在“已弹出”状态
-                    hovered = false
-                    // 下次打开重新抓一张背景底图（窗口内容可能已变化）
-                    BackdropCapture.reset()
-                })
+                StatsOverlay(onClose = closePanel)
             } else {
                 // ❗ 关键：未打开时不能有任何不透明背景，否则会盖住宿主页面
                 Box(Modifier.fillMaxSize()) {
@@ -422,7 +477,7 @@ private fun OverlayHost() {
                         onHoverChange = { hovered = it },
                         onClick = {
                             // 必须在面板出现之前截图，否则会把面板自己拍进去
-                            BackdropCapture.captureIfNeeded()
+                            BackdropCapture.captureIfNeeded(UiStateStore.loadBackdropBlur())
                             OverlayInjection.panelOpen.value = true
                         }
                     )
@@ -676,6 +731,17 @@ private fun StatsOverlay(onClose: () -> Unit) {
     Surface(modifier = Modifier.fillMaxSize(), color = LocalSaltPalette.current.background) {
     Box(
         Modifier.fillMaxSize()
+            .onGloballyPositioned { coords ->
+                // 记录内容区在窗口内的范围：点击落在范围外（左侧导航栏等）时自动关闭面板
+                val origin = coords.localToWindow(androidx.compose.ui.geometry.Offset.Zero)
+                val sz = coords.size
+                OverlayInjection.contentBoundsInWindow = java.awt.Rectangle(
+                    origin.x.toInt(),
+                    origin.y.toInt(),
+                    sz.width,
+                    sz.height
+                )
+            }
             .focusRequester(escRequester)
             .focusTarget()
             .onPreviewKeyEvent { event ->
@@ -699,10 +765,18 @@ private fun StatsOverlay(onClose: () -> Unit) {
                 }
             }
     ) {
-    // 背景优先级：磨砂底图（被模糊的宿主窗口） > 壁纸 > 纯色
-    val backdrop = remember { BackdropCapture.bitmap }
+    // 背景优先级：磨砂底图（离屏烘焙好的模糊图） > 壁纸 > 纯色
+    val backdrop = BackdropCapture.bitmapState.value
+    val backdropLuma = BackdropCapture.lumaState.value
     val wallpaper = remember { WallpaperLoader.load() }
     if (backdrop != null) {
+        // 遮罩不透明度随背景亮度自适应：亮背景盖得更实，保证文字对比度
+        val darkBg = LocalSaltPalette.current.isDark
+        val dim = if (darkBg) {
+            0.58f + 0.14f * backdropLuma
+        } else {
+            0.58f + 0.14f * (1f - backdropLuma)
+        }
         Box(
             Modifier.fillMaxSize().drawBehind {
                 drawImage(
@@ -713,7 +787,11 @@ private fun StatsOverlay(onClose: () -> Unit) {
         )
         Surface(
             modifier = Modifier.fillMaxSize(),
-            color = if (LocalSaltPalette.current.isDark) Color(0xD11E262D) else Color(0xD1FAFAFA)
+            color = if (darkBg) {
+                Color(0xFF1E262D).copy(alpha = dim)
+            } else {
+                Color(0xFFFAFAFA).copy(alpha = dim)
+            }
         ) {}
     } else if (wallpaper != null) {
         Box(
@@ -1372,9 +1450,10 @@ private fun CalendarTab(tick: Int, onSelectDay: (String) -> Unit) {
     // 近一年：53 周 × 7 天，列首周一、列尾周日
     val days = remember(tick) { StatsStore.recentDays(400) }
     // 柱状图状态（提升到这里，日历结果才能回写）
-    var gran by remember { mutableStateOf(1) }
+    // 默认：「日」粒度 + 「时长」指标（当天 24 小时柱状图）
+    var gran by remember { mutableStateOf(0) }
     var anchor by remember { mutableStateOf(LocalDate.now()) }
-    var byTime by remember { mutableStateOf(false) }
+    var byTime by remember { mutableStateOf(true) }
     val pickResult = CalState.result.value
     LaunchedEffect(pickResult) {
         if (pickResult != null) {
@@ -2944,6 +3023,28 @@ private fun InfoTab(tick: Int, onEditThreshold: () -> Unit, onEditRetention: () 
                     }
                     RowDivider()
                     ItemRow("壁纸", WallpaperLoader.lastDiagnostics)
+                    RowDivider()
+                    ItemRow("字体", HostFont.lastDiagnostics)
+                    RowDivider()
+                    ItemRow("背景", BackdropCapture.statusState.value)
+                    RowDivider()
+                    Row(
+                        Modifier.fillMaxWidth().height(34.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "模糊强度",
+                            fontSize = SaltDesign.fontSizeMain,
+                            color = p.text,
+                            modifier = Modifier.weight(1f)
+                        )
+                        val currentBlur = BackdropCapture.blurDpState.value
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            BlurChoice(24, currentBlur)
+                            BlurChoice(48, currentBlur)
+                            BlurChoice(72, currentBlur)
+                        }
+                    }
                 }
             }
         }
@@ -3326,6 +3427,19 @@ private fun SegmentButton(label: String, selected: Boolean, onClick: () -> Unit)
             )
         }
     }
+}
+
+/** 信息页的模糊强度档位按钮（改档后立即重新烘焙） */
+@Composable
+private fun BlurChoice(dp: Int, current: Int) {
+    SegmentButton(
+        label = dp.toString() + "dp",
+        selected = dp == current,
+        onClick = {
+            BackdropCapture.setBlurDp(dp)
+            UiStateStore.saveBackdropBlur(dp)
+        }
+    )
 }
 
 @Composable

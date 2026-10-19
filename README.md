@@ -1,8 +1,23 @@
-# 听歌统计 · Salt Player for Windows 插件
+<p align="center">
+  <img src="docs/screenshots/workshop-cover.png" width="420" alt="听歌统计封面">
+</p>
 
-> **本插件 100% 由 AI 生成。**
+<h1 align="center">听歌统计 · Salt Player for Windows 插件</h1>
 
-[Steam 创意工坊](https://steamcommunity.com/sharedfiles/filedetails/?id=3822834646) · [GitHub](https://github.com/WAerWAK/SPW-listen-stats)
+<p align="center">
+  <img src="https://img.shields.io/badge/%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC-v1.2.0-8B5CF6?labelColor=1F2937" alt="最新版本">
+  <img src="https://img.shields.io/badge/SPW-1.19.0-3B82F6?labelColor=1F2937" alt="SPW 版本">
+  <img src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows-0EA5E9?labelColor=1F2937" alt="平台">
+  <img src="https://img.shields.io/badge/license-Apache--2.0-22C55E?labelColor=1F2937" alt="许可证">
+</p>
+
+<p align="center">
+  <a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3822834646">Steam 创意工坊</a> ·
+  <a href="https://github.com/WAerWAK/SPW-listen-stats">GitHub</a> ·
+  <a href="CHANGELOG.md">更新日志</a>
+</p>
+
+<p align="center"><i>本插件 100% 由 AI 生成。</i></p>
 
 记录你听了多少次、听了多久、什么时候听、最爱听什么。全部数据保存在本地，无网络请求。
 
@@ -58,6 +73,7 @@ GitHub 风格年度热力图（点击格子查看当天明细），以及收听�
 ### 其他
 
 - 浮钮可拖动，位置记忆；拖到边缘会自动贴边隐藏；拖动不会误触打开面板
+- **字体与宿主同步**：自动使用 SPW 当前字体（内置 MiSans 或你自定义的字体）
 - **磨砂玻璃背景**：打开面板时截取并模糊 SPW 窗口作为底图
 - 按 `Esc` 逐层退出（先关弹层，再关面板）
 - 面板下沿留空，避开迷你播放条
@@ -112,7 +128,6 @@ com.spwmods.waerwak.listenstats
 
 ## 已知限制
 
-- **字体无法与宿主同步**：SPW 使用 MiSans 并通过 Compose Resources 加载，而宿主 R8 裁掉了 Compose 的字体解析链路；实测自定义字体 / 内置 Inter / 系统默认三者的渲染结果完全一致，插件只能使用系统字体
 - 无云端同步，跨设备请用「备份数据 / 恢复数据」
 
 ---

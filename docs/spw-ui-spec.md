@@ -135,8 +135,8 @@ SPW 的插件配置页 `ModConfigScreen` 就是这个结构：
 | 强调色、面板色、分层色 | ✅ 已接入（`SaltDesign` 使用实测值） |
 | 尺寸/字号/圆角 | ✅ 已接入（SaltUI desktop 值） |
 | 深浅色跟随宿主 | ✅ `AppConfig.isDarkTheme` |
-| 自定义字体 / MiSans | ❌ 宿主裁掉字体渲染链路 |
-| 壁纸背景 | ⚠️ 可读 `AppConfig.wallpaperFilePath`，但 Compose 图片加载与绘制 API 多被裁剪，需实测 |
+| 自定义字体 / MiSans | ✅ `Font(identity, data = ByteArray)` + 宿主 classloader 读 `composeResources/.../font/misans.ttf`（详见 `host-api-availability.md` §2.5） |
+| 壁纸背景 | ✅ `AppConfig.wallpaperFilePath` → `bytes.decodeToImageBitmap()` → `Modifier.drawBehind { drawImage }` + 半透明遮罩 |
 | Haze 真模糊 | ⚠️ 需要混淆的 `LocalHazeState`，脆弱 |
 | SaltUI 组件直调 | ❌ 类名/方法名全混淆（`material.Ϳ` = SaltSurface） |
 
