@@ -2,6 +2,8 @@
 
 > **本插件 100% 由 AI 生成。**
 
+[Steam 创意工坊](https://steamcommunity.com/sharedfiles/filedetails/?id=3822834646) · [GitHub](https://github.com/WAerWAK/SPW-listen-stats)
+
 记录你听了多少次、听了多久、什么时候听、最爱听什么。全部数据保存在本地，无网络请求。
 
 ---
@@ -65,7 +67,7 @@ GitHub 风格年度热力图（点击格子查看当天明细），以及收听�
 
 ## 安装
 
-**方式一（推荐）**：在 SPW 的创意工坊中搜索「听歌统计」订阅。
+**方式一（推荐）**：在 [Steam 创意工坊订阅「听歌统计」](https://steamcommunity.com/sharedfiles/filedetails/?id=3822834646)。
 
 **方式二**：下载 Release 里的 `.spmod`，放入
 `%APPDATA%\Salt Player for Windows\workshop\plugins`，并在该目录的 `enabled.txt` 中加入插件 ID：
