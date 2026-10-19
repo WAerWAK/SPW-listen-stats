@@ -1,0 +1,22 @@
+# 复制为 gradle.properties 并按本机环境填写
+#
+#   cp gradle.properties.example gradle.properties
+#
+# gradle.properties 已被 .gitignore 忽略，不会提交到仓库。
+
+kotlin.stdlib.default.dependency=false
+# Kotlin daemon 在较新 JDK 下偶发崩溃（后端 codegen 断言失败），改用进程内编译
+kotlin.compiler.execution.strategy=in-process
+org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+org.gradle.parallel=true
+org.gradle.caching=true
+
+# 必填：宿主本体
+# Steam 版的 app\ffmpeg-x64.dll 实际是一个 fat jar（从字节 0 开始就是 zip）。
+# 插件用它做 compileOnly 编译桩，好处是 Compose / PF4J / Workshop API 的版本与宿主完全一致。
+# Windows 默认安装位置示例：
+spwHostJar=C:/Program Files (x86)/Steam/steamapps/common/Salt Player for Windows/app/ffmpeg-x64.dll
+
+# 可选：JDK 25 的 javap（宿主类为 class file 69，校验任务需要它）
+# 不填时 verifyHostApi 任务会跳过。
+# spwJavap=D:/tools/jdk25/bin/javap.exe

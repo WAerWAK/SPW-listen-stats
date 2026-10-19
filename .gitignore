@@ -1,0 +1,13 @@
+.gradle/
+.kotlin/
+build/
+out/
+*.iml
+.idea/
+local.properties
+gradle.properties
+*.spmod
+*.zip
+*.log
+.DS_Store
+Thumbs.db

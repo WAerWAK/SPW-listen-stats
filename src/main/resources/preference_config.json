@@ -1,0 +1,59 @@
+{
+  "configs": [
+    {
+      "title": "听歌统计",
+      "config": "config.json",
+      "preferences": [
+        {
+          "type": "button",
+          "title": "计数门槛设置",
+          "summary": "自定义最少秒数 / 曲目百分比 / 取大或取小（打开统计面板 → 信息）",
+          "arrow_type": "link",
+          "on_click": "com.spwmods.waerwak.listenstats.OverlayInjection.openStatsPanelFromConfig"
+        },
+        {
+          "type": "button",
+          "title": "导出 CSV",
+          "summary": "弹出保存对话框，自选导出位置（UTF-8 BOM，Excel 可直接打开）",
+          "arrow_type": "link",
+          "on_click": "com.spwmods.waerwak.listenstats.StatsActions.exportCsvDialog"
+        },
+        {
+          "type": "button",
+          "title": "备份数据",
+          "summary": "把统计与配置打包为 zip（含曲目字典/聚合/明细/配置）",
+          "arrow_type": "link",
+          "on_click": "com.spwmods.waerwak.listenstats.StatsActions.backupDataDialog"
+        },
+        {
+          "type": "button",
+          "title": "恢复数据",
+          "summary": "从备份 zip 恢复（原数据会改名为 .bak 保留）",
+          "arrow_type": "link",
+          "on_click": "com.spwmods.waerwak.listenstats.StatsActions.restoreDataDialog"
+        },
+        {
+          "type": "button",
+          "title": "清空统计",
+          "summary": "内存清零，事件日志改名为 .bak（可恢复）",
+          "arrow_type": "none",
+          "on_click": "com.spwmods.waerwak.listenstats.StatsActions.resetStats"
+        },
+        {
+          "type": "button",
+          "title": "安装浮层（右下角圆钮）",
+          "summary": "注入全屏统计浮层 + 边缘圆钮入口（需 CLASS_TRANSFORM）",
+          "arrow_type": "none",
+          "on_click": "com.spwmods.waerwak.listenstats.OverlayInjection.installOverlayFromConfig"
+        },
+        {
+          "type": "button",
+          "title": "卸载浮层",
+          "summary": "移除浮层注入，圆钮消失",
+          "arrow_type": "none",
+          "on_click": "com.spwmods.waerwak.listenstats.OverlayInjection.uninstallOverlayFromConfig"
+        }
+      ]
+    }
+  ]
+}
