@@ -75,7 +75,20 @@ object BackdropCapture {
                 statusState.value = "截图失败：窗口尺寸异常"
                 return
             }
-            val shot = Robot().createScreenCapture(bounds)
+            // 只截取面板覆盖的内容区（排除左侧导航栏与顶部按钮栏）；
+            // 首次打开时还没记录过内容区范围，回退到全窗口
+            val content = com.spwmods.waerwak.listenstats.OverlayInjection.contentBoundsInWindow
+            val captureRect = if (content != null && content.width > 200 && content.height > 200) {
+                java.awt.Rectangle(
+                    bounds.x + content.x,
+                    bounds.y + content.y,
+                    content.width,
+                    content.height
+                )
+            } else {
+                bounds
+            }
+            val shot = Robot().createScreenCapture(captureRect)
             rawW = shot.width
             rawH = shot.height
             lumaState.value = averageLuma(shot)

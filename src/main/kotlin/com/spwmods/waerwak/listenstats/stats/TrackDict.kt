@@ -17,6 +17,7 @@ internal object TrackDict {
         var title: String = ""
         var artist: String = ""
         var album: String = ""
+        var albumArtist: String = ""
         var dur: Long = 0L
     }
 
@@ -56,6 +57,9 @@ internal object TrackDict {
                     entry.title = JsonLite.string(line, "ti")
                     entry.artist = JsonLite.string(line, "ar")
                     entry.album = JsonLite.string(line, "al")
+                    // 旧数据没有 aa 字段：回退到 artist，保证专辑分组键可用
+                    val storedAa = JsonLite.string(line, "aa")
+                    entry.albumArtist = if (storedAa.isNotEmpty()) storedAa else entry.artist
                     entry.dur = JsonLite.long(line, "dur")
                     map[key] = entry
                 }
@@ -75,7 +79,8 @@ internal object TrackDict {
         title: String,
         artist: String,
         album: String,
-        dur: Long
+        dur: Long,
+        albumArtist: String = ""
     ) {
         val existing = map[key]
         if (existing != null) {
@@ -83,6 +88,7 @@ internal object TrackDict {
             if (existing.title.isBlank() && title.isNotBlank()) existing.title = title
             if (existing.artist.isBlank() && artist.isNotBlank()) existing.artist = artist
             if (existing.album.isBlank() && album.isNotBlank()) existing.album = album
+            if (existing.albumArtist.isBlank() && albumArtist.isNotBlank()) existing.albumArtist = albumArtist
             if (existing.dur <= 0L && dur > 0L) existing.dur = dur
             return
         }
@@ -91,6 +97,7 @@ internal object TrackDict {
         entry.title = title
         entry.artist = artist
         entry.album = album
+        entry.albumArtist = if (albumArtist.isNotBlank()) albumArtist else artist
         entry.dur = dur
         map[key] = entry
         pending.add(lineOf(key, entry))
@@ -134,6 +141,9 @@ internal object TrackDict {
         sb.append("\"ti\":\"").append(JsonLite.escape(entry.title)).append("\",")
         sb.append("\"ar\":\"").append(JsonLite.escape(entry.artist)).append("\",")
         sb.append("\"al\":\"").append(JsonLite.escape(entry.album)).append("\",")
+        if (entry.albumArtist.isNotEmpty()) {
+            sb.append("\"aa\":\"").append(JsonLite.escape(entry.albumArtist)).append("\",")
+        }
         sb.append("\"dur\":").append(entry.dur)
         sb.append('}')
         return sb.toString()

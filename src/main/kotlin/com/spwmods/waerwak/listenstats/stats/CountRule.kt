@@ -71,6 +71,15 @@ object CountRule {
         }
     }
 
+    /** 直接设定门槛（仅测试用；会跳过 config.json 读取） */
+    @Synchronized
+    internal fun setForTesting(newMinSec: Int, newPercent: Int, newMode: String) {
+        minSeconds = newMinSec.coerceIn(LIMIT_MIN_SEC, LIMIT_MAX_SEC)
+        percent = newPercent.coerceIn(0, 100)
+        mode = if (newMode == "min") "min" else "max"
+        loaded = true
+    }
+
     /** 计数门槛（毫秒） */
     fun thresholdMs(durationMs: Long): Long {
         load()

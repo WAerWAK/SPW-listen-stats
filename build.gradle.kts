@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.spwmods.waerwak.listenstats"
-version = "1.2.0"
+version = "1.3.0"
 
 val pluginId = "com.spwmods.waerwak.listenstats"
 val pluginVersion = version.toString()
@@ -57,6 +57,27 @@ dependencies {
     compileOnly(files(hostStubJar))
     // @Extension 注解（编译期）+ 宿主运行时自带
     compileOnly("org.pf4j:pf4j:3.14.1")
+    // 测试需要构造宿主的 MediaItem，运行时也要这份类
+    testImplementation(files(hostStubJar))
+}
+
+/**
+ * 数据层回归测试
+ *
+ * 零依赖：测试是一个带 main() 的 Kotlin 文件，自行断言并输出 PASS/FAIL。
+ * 不引入 JUnit，避免额外依赖与网络拉取。
+ */
+tasks.register<JavaExec>("runDataTests") {
+    group = "verification"
+    description = "运行数据层回归测试（采集/跨天/门槛/崩溃恢复）"
+    dependsOn("testClasses")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("com.spwmods.waerwak.listenstats.test.DataRegressionTestKt")
+    workingDir = layout.buildDirectory.dir("test-run").get().asFile
+    // 宿主类是 class file 69（JDK 25）编译的：运行时必须用 JDK 25，否则加载 MediaItem 会失败
+    val jdk25Home = providers.gradleProperty("jdk25Home").getOrElse("D:/Projects/.tools/jdk25")
+    executable = "$jdk25Home/bin/java.exe"
+    jvmArgs("-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8")
 }
 
 tasks.withType<JavaCompile>().configureEach {

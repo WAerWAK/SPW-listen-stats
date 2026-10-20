@@ -6,13 +6,6 @@
       "preferences": [
         {
           "type": "button",
-          "title": "计数门槛设置",
-          "summary": "自定义最少秒数 / 曲目百分比 / 取大或取小（打开统计面板 → 信息）",
-          "arrow_type": "link",
-          "on_click": "com.spwmods.waerwak.listenstats.OverlayInjection.openStatsPanelFromConfig"
-        },
-        {
-          "type": "button",
           "title": "导出 CSV",
           "summary": "弹出保存对话框，自选导出位置（UTF-8 BOM，Excel 可直接打开）",
           "arrow_type": "link",
@@ -41,17 +34,31 @@
         },
         {
           "type": "button",
-          "title": "安装浮层（右下角圆钮）",
-          "summary": "注入全屏统计浮层 + 边缘圆钮入口（需 CLASS_TRANSFORM）",
+          "title": "悬浮按钮-安装",
+          "summary": "显示右下角圆钮入口（并确保浮层已注入，需 CLASS_TRANSFORM）",
           "arrow_type": "none",
           "on_click": "com.spwmods.waerwak.listenstats.OverlayInjection.installOverlayFromConfig"
         },
         {
           "type": "button",
-          "title": "卸载浮层",
-          "summary": "移除浮层注入，圆钮消失",
+          "title": "悬浮按钮-卸载",
+          "summary": "仅隐藏右下角圆钮；顶栏按钮与统计页仍可正常使用",
           "arrow_type": "none",
           "on_click": "com.spwmods.waerwak.listenstats.OverlayInjection.uninstallOverlayFromConfig"
+        },
+        {
+          "type": "button",
+          "title": "顶栏按钮-安装",
+          "summary": "在标题栏 Quick 左侧添加统计入口按钮",
+          "arrow_type": "none",
+          "on_click": "com.spwmods.waerwak.listenstats.OverlayInjection.installTitlebarFromConfig"
+        },
+        {
+          "type": "button",
+          "title": "顶栏按钮-卸载",
+          "summary": "移除标题栏的统计入口按钮",
+          "arrow_type": "none",
+          "on_click": "com.spwmods.waerwak.listenstats.OverlayInjection.uninstallTitlebarFromConfig"
         }
       ]
     }

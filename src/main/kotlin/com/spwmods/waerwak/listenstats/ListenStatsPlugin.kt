@@ -23,6 +23,17 @@ class ListenStatsPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext)
     override fun start() {
         HostProbe.attach(pluginContext)
         HostProbe.logStartup()
+
+        // 把上次未结算的播放会话补记回统计（崩溃/强杀保护）
+        try {
+            if (com.spwmods.waerwak.listenstats.stats.LiveSessionStore.recover()) {
+                val ms = com.spwmods.waerwak.listenstats.stats.LiveSessionStore.lastRecoveredMs
+                System.err.println("[listen-stats] 已恢复上次未结算的会话：" + (ms / 1000L) + " 秒")
+            }
+        } catch (t: Throwable) {
+            System.err.println("[listen-stats] 恢复会话失败: " + t.message)
+        }
+
         registerHotkey()
 
         // 已授权 CLASS_TRANSFORM 时自动安装浮层（未授权则等用户手动触发）

@@ -52,6 +52,18 @@ object StatsStore {
         if (dir != null && dataDir == null) dataDir = dir
     }
 
+    /** 清空全部内存状态并绑定新的数据目录（仅测试用） */
+    @Synchronized
+    internal fun resetForTesting(dir: File?) {
+        tracks.clear()
+        days.clear()
+        dayTracks.clear()
+        replayedLines = 0
+        TrackDict.clear()
+        dataDir = dir
+        loaded = false
+    }
+
     @Synchronized
     fun dataDirOrNull(): File? {
         ensureLoaded()
@@ -71,10 +83,11 @@ object StatsStore {
         applyToMemory(event)
         val dir = dataDir
         if (dir == null) return
-        val day = dayFormat.format(Date(event.t))
-        val hour = hourFormat.format(Date(event.t)).toIntOrNull() ?: 0
+        val startMs = if (event.ms > 0L && event.ms <= event.t) event.t - event.ms else event.t
+        // 明细文件按「开始日」归档（与次数归属一致）
+        val day = dayFormat.format(Date(startMs))
         val key = TrackDict.keyOf(event.id, event.path)
-        val dailyLine = buildDailyLine(day, key, hour, event)
+        val dailyLines = buildDailyLines(event, key)
         io.execute {
             try {
                 // 1) 原始明细（仅保留最近 N 天）
@@ -88,18 +101,24 @@ object StatsStore {
                     StandardOpenOption.CREATE,
                     StandardOpenOption.APPEND
                 )
-                // 2) 按月聚合（永久）
-                val month = if (day.length >= 7) day.substring(0, 7) else day
-                val dailyFile = File(File(dir, DAILY_DIR), month + ".jsonl")
-                val dailyParent = dailyFile.parentFile
-                if (dailyParent != null) dailyParent.mkdirs()
-                Files.write(
-                    dailyFile.toPath(),
-                    listOf(dailyLine),
-                    Charsets.UTF_8,
-                    StandardOpenOption.CREATE,
-                    StandardOpenOption.APPEND
-                )
+                // 2) 按月聚合（永久）：跨天时会写多行，每行一个日期
+                var li = 0
+                while (li < dailyLines.size) {
+                    val line = dailyLines[li]
+                    val lineDay = JsonLite.string(line, "d")
+                    val month = if (lineDay.length >= 7) lineDay.substring(0, 7) else lineDay
+                    val dailyFile = File(File(dir, DAILY_DIR), month + ".jsonl")
+                    val dailyParent = dailyFile.parentFile
+                    if (dailyParent != null) dailyParent.mkdirs()
+                    Files.write(
+                        dailyFile.toPath(),
+                        listOf(line),
+                        Charsets.UTF_8,
+                        StandardOpenOption.CREATE,
+                        StandardOpenOption.APPEND
+                    )
+                    li++
+                }
                 // 3) 曲目字典
                 TrackDict.flush()
             } catch (t: Throwable) {
@@ -427,6 +446,7 @@ object StatsStore {
                         agg.title = src.title
                         agg.artist = src.artist
                         agg.album = src.album
+                        agg.albumArtist = src.albumArtist
                         agg.durationMs = src.durationMs
                     } else {
                         agg.title = dt.title
@@ -465,9 +485,12 @@ object StatsStore {
             sorted.add(agg)
         }
         sorted.sortWith(Comparator { a, b ->
+            // 0=次数 1=时长 2=最近
             when (sortBy) {
-                1 -> b.lastPlayed.compareTo(a.lastPlayed)
-                2 -> b.listenedMs.compareTo(a.listenedMs)
+                1 -> if (a.listenedMs != b.listenedMs) b.listenedMs.compareTo(a.listenedMs)
+                else b.count.compareTo(a.count)
+                2 -> if (a.lastPlayed != b.lastPlayed) b.lastPlayed.compareTo(a.lastPlayed)
+                else b.count.compareTo(a.count)
                 else -> if (a.count != b.count) b.count.compareTo(a.count)
                 else b.listenedMs.compareTo(a.listenedMs)
             }
@@ -482,7 +505,8 @@ object StatsStore {
         pageSize: Int,
         byAlbum: Boolean,
         sinceDate: String?,
-        query: String
+        query: String,
+        sortBy: Int = 0
     ): AggregatePage {
         ensureLoaded()
         val needle = query.trim().lowercase()
@@ -490,29 +514,57 @@ object StatsStore {
         val map = LinkedHashMap<String, AggregateRow>()
         for (agg in source.values) {
             if (agg.count <= 0 && agg.listenedMs <= 0L) continue
-            val name = if (byAlbum) agg.album else agg.artist
-            if (name.isBlank()) continue
-            if (needle.isNotEmpty() && !name.lowercase().contains(needle)) continue
-            var row = map[name]
-            if (row == null) {
-                row = AggregateRow(name)
-                map[name] = row
-            }
-            row.count += agg.count
-            row.listenedMs += agg.listenedMs
-            row.trackCount++
-            if (agg.count > row.bestCount && agg.id.isNotBlank()) {
-                row.bestCount = agg.count
-                row.coverId = agg.id
-            } else if (row.coverId.isBlank() && agg.id.isNotBlank()) {
-                row.coverId = agg.id
+            if (byAlbum) {
+                val album = agg.album.trim()
+                if (album.isEmpty()) continue
+                val displayName = GroupKeys.albumDisplayName(album)
+                val displayArtist = GroupKeys.albumDisplayArtist(agg.albumArtist, agg.artist)
+                if (needle.isNotEmpty() &&
+                    !displayName.lowercase().contains(needle) &&
+                    !displayArtist.lowercase().contains(needle)
+                ) {
+                    continue
+                }
+                // 专辑用「专辑名 + 专辑艺术家」双键：不同歌手的同名专辑不会被合并
+                val key = GroupKeys.albumGroupKey(album, agg.albumArtist, agg.artist, agg.key)
+                var row = map[key]
+                if (row == null) {
+                    row = AggregateRow(displayName)
+                    row.owner = displayArtist
+                    map[key] = row
+                }
+                accumulate(row, agg)
+            } else {
+                // 艺术家署名可能包含多个合作者，拆开后各自计一次
+                val parts = GroupKeys.splitArtists(agg.artist)
+                var pi = 0
+                while (pi < parts.size) {
+                    val name = parts[pi]
+                    pi++
+                    if (name.isBlank()) continue
+                    if (needle.isNotEmpty() && !name.lowercase().contains(needle)) continue
+                    val key = name.lowercase()
+                    var row = map[key]
+                    if (row == null) {
+                        row = AggregateRow(name)
+                        map[key] = row
+                    }
+                    accumulate(row, agg)
+                }
             }
         }
         val sorted = ArrayList<AggregateRow>()
         for (row in map.values) sorted.add(row)
         sorted.sortWith(Comparator { a, b ->
-            if (a.count != b.count) b.count.compareTo(a.count)
-            else b.listenedMs.compareTo(a.listenedMs)
+            // 0=次数 1=时长 2=最近
+            when (sortBy) {
+                1 -> if (a.listenedMs != b.listenedMs) b.listenedMs.compareTo(a.listenedMs)
+                else b.count.compareTo(a.count)
+                2 -> if (a.lastPlayed != b.lastPlayed) b.lastPlayed.compareTo(a.lastPlayed)
+                else b.count.compareTo(a.count)
+                else -> if (a.count != b.count) b.count.compareTo(a.count)
+                else b.listenedMs.compareTo(a.listenedMs)
+            }
         })
         val total = sorted.size
         val items = ArrayList<AggregateRow>()
@@ -521,14 +573,77 @@ object StatsStore {
         while (i < total && items.size < pageSize) {
             val src = sorted[i]
             val copy = AggregateRow(src.name)
+            copy.owner = src.owner
             copy.count = src.count
             copy.listenedMs = src.listenedMs
             copy.trackCount = src.trackCount
             copy.coverId = src.coverId
+            copy.lastPlayed = src.lastPlayed
             items.add(copy)
             i++
         }
         return AggregatePage(items, total, page, pageSize)
+    }
+
+    /**
+     * 取某个专辑 / 艺术家分组下的全部曲目（详情弹窗用）
+     *
+     * @param byAlbum true = 专辑， false = 艺术家
+     * @param name 专辑名或艺术家名（与榜单显示名一致）
+     * @param owner 专辑艺术家（仅专辑模式使用，空则不限）
+     */
+    @Synchronized
+    fun tracksOfGroup(byAlbum: Boolean, name: String, owner: String): List<TrackAgg> {
+        ensureLoaded()
+        val out = ArrayList<TrackAgg>()
+        val target = name.trim()
+        if (target.isEmpty()) return out
+        val source = rangeAggregatedTracks(null)
+        for (agg in source.values) {
+            if (agg.count <= 0 && agg.listenedMs <= 0L) continue
+            if (byAlbum) {
+                val album = agg.album.trim()
+                if (album.isEmpty()) continue
+                val displayName = GroupKeys.albumDisplayName(album)
+                if (!displayName.equals(target, ignoreCase = true)) continue
+                if (owner.isNotEmpty()) {
+                    val displayOwner = GroupKeys.albumDisplayArtist(agg.albumArtist, agg.artist)
+                    if (!displayOwner.equals(owner.trim(), ignoreCase = true)) continue
+                }
+                out.add(agg)
+            } else {
+                val parts = GroupKeys.splitArtists(agg.artist)
+                var found = false
+                var i = 0
+                while (i < parts.size) {
+                    if (parts[i].equals(target, ignoreCase = true)) {
+                        found = true
+                        break
+                    }
+                    i++
+                }
+                if (found) out.add(agg)
+            }
+        }
+        out.sortWith(Comparator { a, b ->
+            if (a.count != b.count) b.count.compareTo(a.count)
+            else b.listenedMs.compareTo(a.listenedMs)
+        })
+        return out
+    }
+
+    /** 把一个曲目的数据累加到聚合行，并选出封面（取该组内最常听的曲目） */
+    private fun accumulate(row: AggregateRow, agg: TrackAgg) {
+        row.count += agg.count
+        row.listenedMs += agg.listenedMs
+        row.trackCount++
+        if (agg.lastPlayed > row.lastPlayed) row.lastPlayed = agg.lastPlayed
+        if (agg.count > row.bestCount && agg.id.isNotBlank()) {
+            row.bestCount = agg.count
+            row.coverId = agg.id
+        } else if (row.coverId.isBlank() && agg.id.isNotBlank()) {
+            row.coverId = agg.id
+        }
     }
 
     /** 指定日期范围的播放次数（含首尾） */
@@ -844,6 +959,7 @@ object StatsStore {
                 agg.title = entry.title
                 agg.artist = entry.artist
                 agg.album = entry.album
+                agg.albumArtist = entry.albumArtist
                 agg.durationMs = entry.dur
             }
             tracks[key] = agg
@@ -935,16 +1051,22 @@ object StatsStore {
                         applyToMemory(event)
                         replayedLines++
                         migrated++
-                        val day = dayFormat.format(Date(event.t))
-                        val month = if (day.length >= 7) day.substring(0, 7) else day
-                        val hour = hourFormat.format(Date(event.t)).toIntOrNull() ?: 0
                         val key = TrackDict.keyOf(event.id, event.path)
-                        var lines = byMonth[month]
-                        if (lines == null) {
-                            lines = ArrayList()
-                            byMonth[month] = lines
+                        // 迁移时也用「日期 + 小时」多行形式，与实时写入保持一致
+                        val multi = buildDailyLines(event, key)
+                        var li = 0
+                        while (li < multi.size) {
+                            val oneLine = multi[li]
+                            val lineDay = JsonLite.string(oneLine, "d")
+                            val oneMonth = if (lineDay.length >= 7) lineDay.substring(0, 7) else lineDay
+                            var oneBucket = byMonth[oneMonth]
+                            if (oneBucket == null) {
+                                oneBucket = ArrayList()
+                                byMonth[oneMonth] = oneBucket
+                            }
+                            oneBucket.add(oneLine)
+                            li++
                         }
-                        lines.add(buildDailyLine(day, key, hour, event))
                     }
                 } finally {
                     reader.close()
@@ -1002,35 +1124,131 @@ object StatsStore {
     }
 
     /** 一行聚合记录（约 90 字节，不含标题等元信息） */
-    private fun buildDailyLine(date: String, key: String, hour: Int, event: PlayEvent): String {
+    /**
+     * 把一遍播放拆成「日期 + 小时」的多行聚合记录
+     *
+     * 跨天时每天各一行：次数与跳过只在**开始那一行**计 1，其余行为 0；
+     * `hr` 只在开始行写真实小时，其余行写 -1，避免加载时重复累加小时次数。
+     */
+    private fun buildDailyLines(event: PlayEvent, key: String): List<String> {
         val startMs = if (event.ms > 0L && event.ms <= event.t) event.t - event.ms else event.t
+        val startDate = dayFormat.format(Date(startMs))
+        val startHour = hourFormat.format(Date(startMs)).toIntOrNull() ?: 0
+        val out = ArrayList<String>(3)
+        if (event.ms <= 0L) {
+            out.add(
+                lineOf(startDate, key, startHour, 0L,
+                    if (event.counted) 1 else 0, if (event.skipped) 1 else 0, event.t)
+            )
+            return out
+        }
+        var cursor = startMs
+        var remain = event.ms
+        var guard = 0
+        while (remain > 0L && guard < 200) {
+            val zdt = try {
+                java.time.Instant.ofEpochMilli(cursor).atZone(java.time.ZoneId.systemDefault())
+            } catch (t: Throwable) {
+                break
+            }
+            val date = dayFormat.format(Date(cursor))
+            val hour = zdt.hour
+            val hourEnd = zdt.truncatedTo(java.time.temporal.ChronoUnit.HOURS)
+                .plusHours(1)
+                .toInstant()
+                .toEpochMilli()
+            var part = hourEnd - cursor
+            if (part > remain) part = remain
+            if (part <= 0L) break
+            val isStart = date == startDate && hour == startHour
+            out.add(
+                lineOf(
+                    date, key, if (isStart) hour else -1, part,
+                    if (isStart && event.counted) 1 else 0,
+                    if (isStart && event.skipped) 1 else 0,
+                    event.t
+                )
+            )
+            cursor += part
+            remain -= part
+            guard++
+        }
+        if (out.isEmpty()) {
+            out.add(
+                lineOf(startDate, key, startHour, 0L,
+                    if (event.counted) 1 else 0, if (event.skipped) 1 else 0, event.t)
+            )
+        }
+        return out
+    }
+
+    private fun lineOf(
+        date: String,
+        key: String,
+        hour: Int,
+        partMs: Long,
+        counted: Int,
+        skipped: Int,
+        lastPlayed: Long
+    ): String {
         val sb = StringBuilder(160)
         sb.append('{')
         sb.append("\"d\":\"").append(date).append("\",")
         sb.append("\"k\":\"").append(key).append("\",")
-        sb.append("\"c\":").append(if (event.counted) 1 else 0).append(',')
-        sb.append("\"ms\":").append(event.ms).append(',')
-        sb.append("\"sk\":").append(if (event.skipped) 1 else 0).append(',')
+        sb.append("\"c\":").append(counted).append(',')
+        sb.append("\"ms\":").append(partMs).append(',')
+        sb.append("\"sk\":").append(skipped).append(',')
         sb.append("\"hr\":").append(hour).append(',')
-        // 时长按小时边界切分后的分布（稀疏）："20:360000,21:120000"
-        val span = StringBuilder(32)
-        splitByHour(startMs, event.ms) { partHour, partMs ->
-            if (partHour >= 0 && partHour < 24 && partMs > 0L) {
-                if (span.isNotEmpty()) span.append(',')
-                span.append(partHour).append(':').append(partMs)
-            }
-        }
+        val span = StringBuilder(24)
+        if (hour >= 0 && hour < 24 && partMs > 0L) span.append(hour).append(':').append(partMs)
         sb.append("\"hs\":\"").append(span).append("\",")
-        sb.append("\"lt\":").append(event.t)
+        sb.append("\"lt\":").append(lastPlayed)
         sb.append('}')
         return sb.toString()
+    }
+
+    /**
+     * 把一段收听时长按「日期 + 小时」边界切开
+     *
+     * 例：23:59:30 开始听 60 秒 → 19 日 23 点 30 秒 + 20 日 0 点 30 秒。
+     */
+    private fun splitByDayHour(
+        startMs: Long,
+        durationMs: Long,
+        onPart: (dateKey: String, hour: Int, ms: Long) -> Unit
+    ) {
+        if (durationMs <= 0L) return
+        var cursor = startMs
+        var remain = durationMs
+        var guard = 0
+        while (remain > 0L && guard < 200) {
+            val zdt = try {
+                java.time.Instant.ofEpochMilli(cursor).atZone(java.time.ZoneId.systemDefault())
+            } catch (t: Throwable) {
+                onPart(dayFormat.format(Date(cursor)), 0, remain)
+                return
+            }
+            val hourEnd = zdt.truncatedTo(java.time.temporal.ChronoUnit.HOURS)
+                .plusHours(1)
+                .toInstant()
+                .toEpochMilli()
+            var part = hourEnd - cursor
+            if (part > remain) part = remain
+            if (part <= 0L) break
+            onPart(dayFormat.format(Date(cursor)), zdt.hour, part)
+            cursor += part
+            remain -= part
+            guard++
+        }
+        if (remain > 0L) {
+            onPart(dayFormat.format(Date(cursor)), 0, remain)
+        }
     }
 
     /**
      * 把一段收听时长按小时边界切开
      *
      * 例：20:55 开始听 8 分钟 → 20 点计入 5 分钟、21 点计入 3 分钟。
-     * 跨午夜时多出的部分仍归到调用方指定的那一天（保证内存与磁盘记录一致）。
      */
     private fun splitByHour(startMs: Long, durationMs: Long, onPart: (hour: Int, ms: Long) -> Unit) {
         if (durationMs <= 0L) return
@@ -1065,7 +1283,7 @@ object StatsStore {
     private fun applyToMemory(event: PlayEvent) {
         val key = TrackDict.keyOf(event.id, event.path)
         if (key.isEmpty()) return
-        TrackDict.ensure(key, event.id, event.title, event.artist, event.album, event.dur)
+        TrackDict.ensure(key, event.id, event.title, event.artist, event.album, event.dur, event.albumArtist)
 
         var agg = tracks[key]
         if (agg == null) {
@@ -1076,6 +1294,7 @@ object StatsStore {
         if (event.title.isNotBlank()) agg.title = event.title
         if (event.artist.isNotBlank()) agg.artist = event.artist
         if (event.album.isNotBlank()) agg.album = event.album
+        if (event.albumArtist.isNotBlank()) agg.albumArtist = event.albumArtist
         if (event.dur > 0L) agg.durationMs = event.dur
         if (event.counted) agg.count++
         agg.listenedMs += event.ms
@@ -1083,31 +1302,38 @@ object StatsStore {
         if (agg.firstPlayed == 0L || event.t < agg.firstPlayed) agg.firstPlayed = event.t
         if (event.t > agg.lastPlayed) agg.lastPlayed = event.t
 
-        val day = dayFormat.format(Date(event.t))
         val startMs = if (event.ms > 0L && event.ms <= event.t) event.t - event.ms else event.t
+        val startDate = dayFormat.format(Date(startMs))
         val startHour = hourFormat.format(Date(startMs)).toIntOrNull() ?: 0
 
-        var dayAgg = days[day]
-        if (dayAgg == null) {
-            dayAgg = DayAgg(day)
-            days[day] = dayAgg
+        // 次数和跳过归「开始日 / 开始小时」
+        var startDay = days[startDate]
+        if (startDay == null) {
+            startDay = DayAgg(startDate)
+            days[startDate] = startDay
         }
-        if (event.counted) dayAgg.count++
-        dayAgg.listenedMs += event.ms
-        // 次数归开始小时；时长按小时边界切分后分别累加
-        if (startHour >= 0 && startHour < 24) dayAgg.hours[startHour] += 1
-        splitByHour(startMs, event.ms) { partHour, partMs ->
-            if (partHour >= 0 && partHour < 24 && partMs > 0L) dayAgg.hoursMs[partHour] += partMs
+        if (event.counted) startDay.count++
+        if (startHour >= 0 && startHour < 24) startDay.hours[startHour] += 1
+
+        // 时长按「天 + 小时」切分：跨午夜时两天各得自己那一段
+        splitByDayHour(startMs, event.ms) { dateKey, partHour, partMs ->
+            var d = days[dateKey]
+            if (d == null) {
+                d = DayAgg(dateKey)
+                days[dateKey] = d
+            }
+            d.listenedMs += partMs
+            if (partHour >= 0 && partHour < 24) d.hoursMs[partHour] += partMs
         }
 
-        var perDay = dayTracks[day]
+        var perDay = dayTracks[startDate]
         if (perDay == null) {
             perDay = LinkedHashMap()
-            dayTracks[day] = perDay
+            dayTracks[startDate] = perDay
         }
         var dt = perDay[key]
         if (dt == null) {
-            dt = DayTrackAgg(day, key)
+            dt = DayTrackAgg(startDate, key)
             dt.title = event.title
             dt.artist = event.artist
             perDay[key] = dt

@@ -8,6 +8,7 @@ data class PlayEvent(
     val title: String,
     val artist: String,
     val album: String,
+    val albumArtist: String = "",
     val ms: Long,
     val dur: Long,
     val counted: Boolean,
@@ -21,6 +22,9 @@ data class PlayEvent(
         sb.append("\"title\":\"").append(JsonLite.escape(title)).append("\",")
         sb.append("\"artist\":\"").append(JsonLite.escape(artist)).append("\",")
         sb.append("\"album\":\"").append(JsonLite.escape(album)).append("\",")
+        if (albumArtist.isNotEmpty()) {
+            sb.append("\"aa\":\"").append(JsonLite.escape(albumArtist)).append("\",")
+        }
         sb.append("\"ms\":").append(ms).append(',')
         sb.append("\"dur\":").append(dur).append(',')
         sb.append("\"counted\":").append(counted).append(',')
@@ -41,6 +45,7 @@ data class PlayEvent(
                 title = JsonLite.string(line, "title"),
                 artist = JsonLite.string(line, "artist"),
                 album = JsonLite.string(line, "album"),
+                albumArtist = JsonLite.string(line, "aa"),
                 ms = JsonLite.long(line, "ms"),
                 dur = JsonLite.long(line, "dur"),
                 counted = JsonLite.bool(line, "counted"),
@@ -57,6 +62,7 @@ class TrackAgg(val key: String) {
     var title: String = ""
     var artist: String = ""
     var album: String = ""
+    var albumArtist: String = ""
     var count: Int = 0
     var listenedMs: Long = 0L
     var skipCount: Int = 0
@@ -111,6 +117,11 @@ data class TrackPage(
 
 /** 专辑 / 艺术家聚合行 */
 class AggregateRow(val name: String) {
+    /** 专辑榜的副标题（专辑艺术家）；艺术家榜留空 */
+    var owner: String = ""
+
+    /** 组内最近一次播放时间 */
+    var lastPlayed: Long = 0L
     var count: Int = 0
     var listenedMs: Long = 0L
     var trackCount: Int = 0

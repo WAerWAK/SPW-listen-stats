@@ -29,7 +29,8 @@ object SessionTracker {
         val path: String,
         val title: String,
         val artist: String,
-        val album: String
+        val album: String,
+        val albumArtist: String
     )
 
     private class Session(val key: String, var meta: Meta) {
@@ -38,10 +39,30 @@ object SessionTracker {
         var lastWallNanos: Long = 0L
         var counted: Boolean = false
         var durationMs: Long = 0L
+        /** 本遍的近似开始时间（崩溃恢复时用来还原时间位置） */
+        var startTimeMs: Long = 0L
     }
 
     private var session: Session? = null
     private var playing: Boolean = false
+
+    /**
+     * 时间源（可注入，供回归测试用假时钟）
+     *
+     * 生产环境用系统时钟；测试里替换成可控的计数，才能验证跨天、暂停、
+     * 睡眠等需要精确时间关系的场景。
+     */
+    internal var nanoClock: () -> Long = { System.nanoTime() }
+    internal var wallClock: () -> Long = { System.currentTimeMillis() }
+
+    /** 清空全部运行状态（仅测试用） */
+    @Synchronized
+    internal fun resetForTesting() {
+        session = null
+        playing = false
+        nanoClock = { System.nanoTime() }
+        wallClock = { System.currentTimeMillis() }
+    }
 
     private val io = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "listen-stats-duration").apply { isDaemon = true }
@@ -53,7 +74,7 @@ object SessionTracker {
     fun onTrack(item: PlaybackExtensionPoint.MediaItem) {
         val key = keyOf(item)
         if (key.isBlank()) return
-        val meta = Meta(item.id, item.path, item.title, item.artist, item.album)
+        val meta = Meta(item.id, item.path, item.title, item.artist, item.album, item.albumArtist)
 
         val current = session
         if (current != null && current.key == key) {
@@ -62,12 +83,12 @@ object SessionTracker {
         }
 
         if (current != null) {
-            val finished = settle(current)
-            if (finished != null) StatsStore.record(finished)
+            persistFinished(current)
         }
 
         val fresh = Session(key, meta)
-        fresh.lastWallNanos = System.nanoTime()
+        fresh.lastWallNanos = nanoClock()
+        fresh.startTimeMs = wallClock()
         session = fresh
         if (item.id.isNotBlank()) requestDuration(key, item.id)
     }
@@ -75,7 +96,7 @@ object SessionTracker {
     @Synchronized
     fun onPosition(position: Long) {
         val current = session ?: return
-        val now = System.nanoTime()
+        val now = nanoClock()
         val last = current.lastPosition
         val lastWall = current.lastWallNanos
 
@@ -87,8 +108,7 @@ object SessionTracker {
 
         if (position < last - BACK_JUMP_TOLERANCE_MS) {
             if (current.counted) {
-                val finished = settle(current)
-                if (finished != null) StatsStore.record(finished)
+                persistFinished(current)
                 current.listenedMs = 0L
                 current.counted = false
             }
@@ -113,19 +133,33 @@ object SessionTracker {
             val threshold = StatsThresholds.countThreshold(current.durationMs)
             if (current.listenedMs >= threshold) current.counted = true
         }
+        // 定期落盘：进程被强杀时最多丢 10 秒
+        LiveSessionStore.maybeSave(
+            LiveSessionStore.Snapshot(
+                startTimeMs = current.startTimeMs,
+                id = current.meta.id,
+                path = current.meta.path,
+                title = current.meta.title,
+                artist = current.meta.artist,
+                album = current.meta.album,
+                albumArtist = current.meta.albumArtist,
+                listenedMs = current.listenedMs,
+                durationMs = current.durationMs,
+                counted = current.counted
+            )
+        )
     }
 
     @Synchronized
     fun onSeek(position: Long) {
         val current = session ?: return
         if (current.counted && position <= RESTART_POSITION_MS) {
-            val finished = settle(current)
-            if (finished != null) StatsStore.record(finished)
+            persistFinished(current)
             current.listenedMs = 0L
             current.counted = false
         }
         current.lastPosition = position
-        current.lastWallNanos = System.nanoTime()
+        current.lastWallNanos = nanoClock()
     }
 
     @Synchronized
@@ -133,7 +167,7 @@ object SessionTracker {
         playing = isPlaying
         val current = session ?: return
         // 恢复播放时重置墙钟基准，避免把暂停期间的时间补进时长
-        current.lastWallNanos = if (isPlaying) System.nanoTime() else 0L
+        current.lastWallNanos = if (isPlaying) nanoClock() else 0L
     }
 
     fun onState(state: PlaybackExtensionPoint.State) {
@@ -149,11 +183,18 @@ object SessionTracker {
     fun flush() {
         val current = session ?: return
         session = null
-        val finished = settle(current)
-        if (finished != null) StatsStore.record(finished)
+        persistFinished(current)
     }
 
     // ---------------------------------------------------------------- 内部
+
+    /** 结算并写入统计；写入成功后清空崩溃保护的残留 */
+    private fun persistFinished(current: Session) {
+        val finished = settle(current)
+        if (finished == null) return
+        StatsStore.record(finished)
+        LiveSessionStore.clear()
+    }
 
     private fun settle(current: Session): PlayEvent? {
         if (current.listenedMs <= 0L) return null
@@ -167,12 +208,13 @@ object SessionTracker {
             }
         }
         return PlayEvent(
-            t = System.currentTimeMillis(),
+            t = wallClock(),
             id = current.meta.id,
             path = current.meta.path,
             title = current.meta.title,
             artist = current.meta.artist,
             album = current.meta.album,
+            albumArtist = current.meta.albumArtist,
             ms = current.listenedMs,
             dur = dur,
             counted = counted,
@@ -211,6 +253,7 @@ object SessionTracker {
         path = if (fresh.path.isBlank()) old.path else fresh.path,
         title = if (fresh.title.isBlank()) old.title else fresh.title,
         artist = if (fresh.artist.isBlank()) old.artist else fresh.artist,
-        album = if (fresh.album.isBlank()) old.album else fresh.album
+        album = if (fresh.album.isBlank()) old.album else fresh.album,
+        albumArtist = if (fresh.albumArtist.isBlank()) old.albumArtist else fresh.albumArtist
     )
 }

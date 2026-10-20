@@ -47,8 +47,8 @@ foreach ($item in $old) {
 Copy-Item $SpmodPath $plugins
 "已复制：$(Split-Path $SpmodPath -Leaf)"
 
-# 4. 启动 SPW
-Start-Process $exe
+# 4. 启动 SPW（离线模式 + 创意工坊发布者模式，避免启动时联网校验/更新检查）
+Start-Process $exe -ArgumentList '--offline', '--workshop-publisher'
 Start-Sleep -Seconds 5
 $running = Get-Process -Name 'Salt Player for Windows' -ErrorAction SilentlyContinue
 if ($running) { "SPW 已启动" } else { "!! SPW 启动失败，请手动打开" }
