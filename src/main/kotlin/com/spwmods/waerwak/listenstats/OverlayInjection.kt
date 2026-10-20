@@ -85,6 +85,7 @@ import com.spwmods.waerwak.listenstats.stats.TrackPage
 import com.spwmods.waerwak.listenstats.stats.StatsThresholds
 import com.spwmods.waerwak.listenstats.stats.CountRule
 import com.spwmods.waerwak.listenstats.stats.StorageRule
+import com.spwmods.waerwak.listenstats.stats.HeatmapScale
 import com.spwmods.waerwak.listenstats.stats.DayTrackAgg
 import com.spwmods.waerwak.listenstats.stats.PlayEvent
 import com.spwmods.waerwak.listenstats.stats.Bucket
@@ -573,6 +574,11 @@ private fun OverlayHost() {
     val palette = if (dark) SaltDarkPalette else SaltLightPalette
     val hostFont = remember { HostFont.family() }
 
+    // 每次打开面板：清空封面失败冷却，让上一次没加载出来的封面重新尝试
+    LaunchedEffect(opened) {
+        if (opened) com.spwmods.waerwak.listenstats.ui.CoverCache.resetFailures()
+    }
+
     MaterialTheme(colorScheme = darkColorScheme(primary = palette.highlight)) {
         CompositionLocalProvider(
             LocalSaltPalette provides palette,
@@ -920,18 +926,11 @@ private fun StatsOverlay(onClose: () -> Unit) {
                 }
             }
     ) {
-    // 背景优先级：磨砂底图（离屏烘焙好的模糊图） > 壁纸 > 纯色
+    // 背景优先级：截图底图 > 壁纸 > 纯色
+    // 注意：不加任何纯色遮罩——加了会与 SPW 其余部分的色调/亮度对不上（「背景色」的来源）
     val backdrop = BackdropCapture.bitmapState.value
-    val backdropLuma = BackdropCapture.lumaState.value
     val wallpaper = remember { WallpaperLoader.load() }
     if (backdrop != null) {
-        // 遮罩不透明度随背景亮度自适应：亮背景盖得更实，保证文字对比度
-        val darkBg = LocalSaltPalette.current.isDark
-        val dim = if (darkBg) {
-            0.58f + 0.14f * backdropLuma
-        } else {
-            0.58f + 0.14f * (1f - backdropLuma)
-        }
         Box(
             Modifier.fillMaxSize().drawBehind {
                 drawImage(
@@ -940,14 +939,6 @@ private fun StatsOverlay(onClose: () -> Unit) {
                 )
             }
         )
-        Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = if (darkBg) {
-                Color(0xFF1E262D).copy(alpha = dim)
-            } else {
-                Color(0xFFFAFAFA).copy(alpha = dim)
-            }
-        ) {}
     } else if (wallpaper != null) {
         Box(
             Modifier.fillMaxSize().drawBehind {
@@ -1249,7 +1240,7 @@ private fun TabIcon(kind: Int, color: Color) {
 
 @Composable
 private fun OverviewTab(tick: Int) {
-    val snapshot = remember(tick) { StatsStore.snapshot(5, 5) }
+    val snapshot = remember(tick) { StatsStore.snapshot(10, 10) }
     val streak = remember(tick) { StatsStore.currentStreak() }
 
     Column(Modifier.fillMaxWidth()) {
@@ -1286,7 +1277,7 @@ private fun OverviewTab(tick: Int) {
             }
             Column(Modifier.weight(1f)) {
                 SaltGroup {
-                    GroupHeader("最常听 Top 5")
+                    GroupHeader("最常听 Top 10")
                     if (snapshot.topTracks.isEmpty()) {
                         EmptyHint("还没有计数记录")
                     }
@@ -1785,6 +1776,25 @@ private fun ActivityHeatmap(
     }
     val fullWeeks = ((fullEnd.toEpochDay() - fullStart.toEpochDay()) / 7L).toInt() + 1
 
+    // 动态色阶上限：当前显示范围内「收听时长最高的那一天」
+    // 这样无论每天听几分钟还是几小时，热力图总有完整的深浅层次
+    val highMs = remember(tick, yearMode) {
+        var best = 0L
+        for (entry in daily.entries) {
+            val date = try {
+                LocalDate.parse(entry.key)
+            } catch (t: Throwable) {
+                continue
+            }
+            if (date.isBefore(fullStart) || date.isAfter(fullEnd)) continue
+            if (date.isAfter(today)) continue
+            if (yearMode >= 0 && date.year != yearMode) continue
+            val ms = entry.value.listenedMs
+            if (ms > best) best = ms
+        }
+        best
+    }
+
     val labelCol = 24.dp
     val labelGap = 4.dp
     val gap = 3.dp
@@ -1873,7 +1883,10 @@ private fun ActivityHeatmap(
                 DropdownMenu(
                     expanded = yearPickerOpen,
                     onDismissRequest = { yearPickerOpen = false },
-                    modifier = Modifier.width(136.dp)
+                    modifier = Modifier.width(136.dp),
+                    // 不给 containerColor 会取 MaterialTheme 的 surface——浅色主题下可能是深色，
+                    // 与我们的浅色文本撞成黑底黑字
+                    containerColor = p.background
                 ) {
                     var oi = 0
                     while (oi < years.size && oi < 8) {
@@ -2002,11 +2015,12 @@ private fun ActivityHeatmap(
                                         if (inRange && !date.isAfter(today)) {
                                             val key = date.toString()
                                             val agg = daily[key]
-                                            val count = if (agg == null) 0 else agg.count
+                                            val ms = if (agg == null) 0L else agg.listenedMs
+                                            val level = HeatmapScale.level(ms, highMs)
                                             val x = w * (cellPx + gapPx)
                                             val y = d * (cellPx + gapPx)
                                             drawRoundRect(
-                                                color = heatColor(count, p.isDark),
+                                                color = heatColor(level, p.isDark),
                                                 topLeft = Offset(x, y),
                                                 size = Size(cellPx, cellPx),
                                                 cornerRadius = radius
@@ -3436,21 +3450,22 @@ private fun HourBar(
 
 private val levelSamples = intArrayOf(0, 1, 3, 6, 10)
 
-private fun heatColor(count: Int, dark: Boolean): Color {
+/** 热力图配色：按「当天收听时长」档位（0=无，1–4 递增）而非次数 */
+private fun heatColor(level: Int, dark: Boolean): Color {
     if (dark) {
         return when {
-            count <= 0 -> Color(0x14FFFFFF)
-            count == 1 -> Color(0x4D4CC2FF)
-            count <= 3 -> Color(0x804CC2FF)
-            count <= 6 -> Color(0xC04CC2FF)
+            level <= 0 -> Color(0x14FFFFFF)
+            level == 1 -> Color(0x4D4CC2FF)
+            level == 2 -> Color(0x804CC2FF)
+            level == 3 -> Color(0xC04CC2FF)
             else -> Color(0xFF4CC2FF)
         }
     }
     return when {
-        count <= 0 -> Color(0x14000000)
-        count == 1 -> Color(0x4D0470E6)
-        count <= 3 -> Color(0x990470E6)
-        count <= 6 -> Color(0xCC0470E6)
+        level <= 0 -> Color(0x14000000)
+        level == 1 -> Color(0x4D0470E6)
+        level == 2 -> Color(0x990470E6)
+        level == 3 -> Color(0xCC0470E6)
         else -> Color(0xFF0470E6)
     }
 }
@@ -4220,16 +4235,16 @@ private fun InfoTab(tick: Int, onEditThreshold: () -> Unit, onEditRetention: () 
                     RowDivider()
                     ItemRow("背景", BackdropCapture.statusState.value)
                     RowDivider()
-                    ItemRow("标题栏按钮", com.spwmods.waerwak.listenstats.ui.TitlebarButton.statusText())
+                    ItemRow("封面缓存", com.spwmods.waerwak.listenstats.ui.CoverCache.statsText())
                     RowDivider()
-                    ItemRow("内容宽度", OverlayInjection.contentPercent.value.toString() + "%")
+                    ItemRow("标题栏按钮", com.spwmods.waerwak.listenstats.ui.TitlebarButton.statusText())
                     RowDivider()
                     Row(
                         Modifier.fillMaxWidth().height(34.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            "宽度上限",
+                            "内容宽度上限",
                             fontSize = SaltDesign.fontSizeMain,
                             color = p.text,
                             modifier = Modifier.weight(1f)
@@ -4262,6 +4277,7 @@ private fun InfoTab(tick: Int, onEditThreshold: () -> Unit, onEditRetention: () 
                         )
                         val currentBlur = BackdropCapture.blurDpState.value
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            BlurChoice(BackdropCapture.BLUR_LOW, currentBlur)
                             BlurChoice(24, currentBlur)
                             BlurChoice(48, currentBlur)
                             BlurChoice(72, currentBlur)
@@ -4586,7 +4602,8 @@ private fun Pager(
                 DropdownMenu(
                     expanded = sizeOpen,
                     onDismissRequest = { sizeOpen = false },
-                    modifier = Modifier.width(120.dp)
+                    modifier = Modifier.width(120.dp),
+                    containerColor = LocalSaltPalette.current.background
                 ) {
                     var oi = 0
                     while (oi < pageSizeOptions.size) {
@@ -4731,7 +4748,7 @@ private fun SegmentButton(label: String, selected: Boolean, onClick: () -> Unit)
 @Composable
 private fun BlurChoice(dp: Int, current: Int) {
     SegmentButton(
-        label = dp.toString() + "dp",
+        label = if (dp <= BackdropCapture.BLUR_LOW) BackdropCapture.BLUR_LOW.toString() + "dp" else dp.toString() + "dp",
         selected = dp == current,
         onClick = {
             BackdropCapture.setBlurDp(dp)

@@ -60,4 +60,64 @@ object WallpaperLoader {
             null
         }
     }
+
+    /**
+     * 壁纸原图（AWT 位图，供按窗口比例裁切用）
+     *
+     * 与 [load] 分开缓存：这里要的是像素级可裁切的 BufferedImage，
+     * 面板兜底显示则用 Compose 的 ImageBitmap。
+     */
+    @Volatile
+    private var rawBuffered: java.awt.image.BufferedImage? = null
+
+    @Volatile
+    private var rawAttempted = false
+
+    fun loadBuffered(): java.awt.image.BufferedImage? {
+        if (rawAttempted) return rawBuffered
+        rawAttempted = true
+        return try {
+            val path = AppConfig.wallpaperFilePath
+            if (path.isNullOrBlank()) return null
+            val file = File(path)
+            if (!file.isFile) return null
+            val img = javax.imageio.ImageIO.read(file)
+            // 超大壁纸（4K/8K）先缩小再缓存：面板背景用不到那么多像素，
+            // 而原图常驻内存会吃 30–60 MB
+            val capped = if (img.width > 2560) shrinkTo(img, 2560) else img
+            rawBuffered = capped
+            capped
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
+    private fun shrinkTo(img: java.awt.image.BufferedImage, targetW: Int): java.awt.image.BufferedImage? = try {
+        val h = (img.height.toFloat() / img.width.toFloat() * targetW.toFloat()).toInt().coerceAtLeast(1)
+        val out = java.awt.image.BufferedImage(targetW, h, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+        val g = out.createGraphics()
+        g.setRenderingHint(
+            java.awt.RenderingHints.KEY_INTERPOLATION,
+            java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR
+        )
+        g.drawImage(img, 0, 0, targetW, h, null)
+        g.dispose()
+        out
+    } catch (t: Throwable) {
+        null
+    }
+
+    /** 壁纸文件路径（诊断用） */
+    fun filePath(): String? = try {
+        AppConfig.wallpaperFilePath
+    } catch (t: Throwable) {
+        null
+    }
+
+    /** SPW 是否开启了「壁纸材质」（壁纸被模糊 + 颗粒） */
+    fun materialEnabled(): Boolean = try {
+        AppConfig.wallpaperMaterial
+    } catch (t: Throwable) {
+        false
+    }
 }

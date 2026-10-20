@@ -19,9 +19,9 @@ object UiStateStore {
     @Volatile
     private var entryY: Float = 0f
 
-    /** 磨砂背景模糊强度（dp） */
+    /** 额外模糊强度（dp）；3 = 最低档（与底图缩放带来的自然柔化相当） */
     @Volatile
-    private var backdropBlurDp: Int = 48
+    private var backdropBlurDp: Int = 3
 
     /** 内容最大宽度占屏幕宽度的百分比（50–100） */
     @Volatile

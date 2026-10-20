@@ -29,16 +29,27 @@ import org.jetbrains.skia.Surface
  */
 object BackdropCapture {
 
-    /** 烘焙后的底图宽度（越大细节越多，模糊后仍柔和） */
-    private const val TARGET_WIDTH = 960
+    /** 烘焙后的底图宽度（越大细节越多；面板会拉伸到内容区大小） */
+    private const val TARGET_WIDTH = 1500
 
-    /** 噪点叠加强度（0–255），约 3% */
+    /** 噪点叠加强度（0–255），约 3%。仅在额外模糊开启时叠加 */
     private const val NOISE_ALPHA = 8
 
     private const val NOISE_SEED = 20261019L
 
+    /** 关闭额外模糊（仅底图缩放带来的自然柔化） */
+    const val BLUR_OFF = 0
+
+    /**
+     * 最低档：量化后的「很轻的柔化」
+     *
+     * 底图会缩到 1500px 再拉伸到面板尺寸，双线性缩放本身等效 sigma ≈ 0.5px，
+     * 换算成我们的 sigma → dp 系数（0.18）约为 2.8dp，这里取 3dp 作为最低档。
+     */
+    const val BLUR_LOW = 3
+
     const val BLUR_MIN = 24
-    const val BLUR_DEFAULT = 48
+    const val BLUR_DEFAULT = BLUR_LOW
     const val BLUR_MAX = 72
 
     /** 烘焙结果（面板读取，自动触发重组） */
@@ -59,11 +70,20 @@ object BackdropCapture {
     private var noise: SkiaImage? = null
     private var captured = false
 
-    /** 面板打开前调用：截取宿主窗口并烘焙（本次会话只截一次） */
+    /** 底图来源（诊断用） */
+    @Volatile
+    private var sourceState = "未尝试"
+
+    /** 面板打开前调用：截取窗口内容区并烘焙 */
     fun captureIfNeeded(blurDp: Int) {
         blurDpState.value = coerceBlur(blurDp)
         if (captured) return
         captured = true
+        captureFromScreen()
+    }
+
+    /** Robot 截取窗口内容区（壁纸、壁纸材质、亮度都来自宿主真实渲染） */
+    private fun captureFromScreen() {
         try {
             val target = hostWindow()
             if (target == null) {
@@ -100,6 +120,7 @@ object BackdropCapture {
                 return
             }
             rawImage = SkiaImage.makeFromEncoded(bytes)
+            sourceState = "窗口截图"
             bake()
         } catch (t: Throwable) {
             statusState.value = "截图失败：" + (t.message ?: t.javaClass.simpleName)
@@ -124,6 +145,7 @@ object BackdropCapture {
     }
 
     private fun coerceBlur(dp: Int): Int = when {
+        dp <= BLUR_LOW -> BLUR_LOW
         dp < BLUR_MIN -> BLUR_MIN
         dp > BLUR_MAX -> BLUR_MAX
         else -> dp
@@ -131,7 +153,7 @@ object BackdropCapture {
 
     private fun bake() {
         val src = rawImage ?: return
-        // 注意：rawImage 在 captureIfNeeded 里已经缩到目标宽度，这里不能再缩一次
+        // 注意：rawImage 在 capture 阶段已经缩到目标宽度，这里不能再缩一次
         val w = src.width
         val h = src.height
         try {
@@ -140,29 +162,29 @@ object BackdropCapture {
             val srcRect = Rect.makeWH(src.width.toFloat(), src.height.toFloat())
             val dstRect = Rect.makeWH(w.toFloat(), h.toFloat())
 
-            // sigma 与 dp 的换算：底图宽 960 会被拉伸到全屏（约 1.8–2 倍），
+            // 「跟随」= 不额外处理，截图就是宿主渲染的最终结果
+            val effective = blurDpState.value
+
+            if (effective <= BLUR_OFF) {
+                canvas.drawImageRect(src, srcRect, dstRect)
+                val snapshot = surface.makeImageSnapshot()
+                bitmapState.value = snapshot.toComposeImageBitmap()
+                statusState.value = sourceState + " · " + w + "px（无额外处理）"
+                return
+            }
+
+            // sigma 与 dp 的换算：底图会被拉伸到内容区大小（约 1–2 倍），
             // 0.18 倍后 24dp≈屏幕 8px、48dp≈16px、72dp≈25px
-            val sigma = blurDpState.value * 0.18f
+            val sigma = effective * 0.18f
             val blurPaint = Paint()
             blurPaint.imageFilter = ImageFilter.makeBlur(sigma, sigma, FilterTileMode.CLAMP, null)
             canvas.drawImageRect(src, srcRect, dstRect, blurPaint)
 
-            // 极轻噪点：让磨砂感更接近真实亚克力
-            val noiseImg = ensureNoise(w, h)
-            if (noiseImg != null) {
-                val noisePaint = Paint()
-                noisePaint.alpha = NOISE_ALPHA
-                canvas.drawImageRect(
-                    noiseImg,
-                    Rect.makeWH(noiseImg.width.toFloat(), noiseImg.height.toFloat()),
-                    dstRect,
-                    noisePaint
-                )
-            }
+            // 不再叠噪点：噪点会把整体亮度抬高/压低，和 SPW 其余部分对不上
 
             val snapshot = surface.makeImageSnapshot()
             bitmapState.value = snapshot.toComposeImageBitmap()
-            statusState.value = "磨砂玻璃 · " + w + "px · 模糊 " + blurDpState.value + "dp"
+            statusState.value = sourceState + " · " + w + "px · 模糊 " + effective + "dp"
         } catch (t: Throwable) {
             statusState.value = "烘焙失败：" + (t.message ?: t.javaClass.simpleName)
         }

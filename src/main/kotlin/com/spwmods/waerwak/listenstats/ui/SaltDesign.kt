@@ -109,8 +109,10 @@ val SaltDarkPalette = SaltPalette(
     subText = Color(0xBFE1E6EB),
     labelAccent = Color(0xFF8FC7E8),
     background = Color(0xFF1E262D),
-    card = Color(0xFF1E262D),
-    subBackground = Color(0x14FFFFFF),
+    // 卡片半透明，让磨砂背景透出来（叠在面板底色上仍接近原色）
+    card = Color(0xB81E262D),
+    // 悬停 / 选中态：12% 白（原 8% 偏弱）
+    subBackground = Color(0x1FFFFFFF),
     onHighlight = Color(0xFF0E1418),
     error = Color(0xFFFF6B6B),
     glass = Color(0x33FFFFFF),
@@ -128,7 +130,8 @@ val SaltLightPalette = SaltPalette(
     subText = Color(0xFF7A7A7A),
     labelAccent = Color(0xFF3A7EA6),
     background = Color(0xFFFAFAFA),
-    card = Color(0xFFFFFFFF),
+    // 卡片半透明（80% 白），让磨砂背景透出来
+    card = Color(0xCCFFFFFF),
     subBackground = Color(0x99FFFFFF),
     onHighlight = Color(0xFF0E1418),
     error = Color(0xFFD32F2F),
