@@ -5,7 +5,7 @@
 <h1 align="center">听歌统计 · Salt Player for Windows 插件</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC-v1.3.1-8B5CF6?labelColor=1F2937" alt="最新版本">
+  <img src="https://img.shields.io/badge/%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC-v1.4.0-8B5CF6?labelColor=1F2937" alt="最新版本">
   <img src="https://img.shields.io/badge/SPW-1.19.0-3B82F6?labelColor=1F2937" alt="SPW 版本">
   <img src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows-0EA5E9?labelColor=1F2937" alt="平台">
   <img src="https://img.shields.io/badge/license-Apache--2.0-22C55E?labelColor=1F2937" alt="许可证">
@@ -27,7 +27,7 @@
 
 ### 概览
 
-总播放次数、累计收听时长、曲目数、连续收听天数，以及最近播放与最常听 Top 10（含封面）。
+累计收听时长、总播放次数、曲目数、连续收听与最长连续；「最近播放」与「最常听 Top 10」（含封面）；底部「听歌小结」显示听得最多的一天、每日平均收听、最常听歌时段。点击累计收听数值可在三种格式间循环（`12时05分` / `1天12时05分` / `1.50天`）。
 
 <img src="docs/screenshots/overview.png" width="100%" alt="概览页">
 
@@ -45,7 +45,7 @@ GitHub 风格年度热力图（可切换近一年 / 具体年份，悬浮显示�
 
 ### 信息
 
-插件与宿主环境、采集状态、数据占用、权限状态；可调整计数门槛、明细保留天数、模糊强度（3 / 24 / 48 / 72dp）、内容宽度上限。
+插件与宿主环境、采集状态、数据占用、权限状态、运行诊断；可调整计数门槛、明细保留天数、字体大小（0–60%）、内容宽度上限。
 
 <img src="docs/screenshots/info.png" width="100%" alt="信息页">
 
@@ -79,8 +79,8 @@ GitHub 风格年度热力图（可切换近一年 / 具体年份，悬浮显示�
 ### 其他
 
 - 两个入口：**右下角悬浮圆钮**（可拖动、贴边隐藏）与**标题栏按钮**（Quick 左侧），都可在模组管理页安装 / 卸载
-- **字体与宿主同步**：自动使用 SPW 当前字体（内置 MiSans 或你自定义的字体）
-- **背景随窗口**：每次打开面板截取内容区作为底图，壁纸、模糊、亮度与 SPW 其余部分保持一致；模糊强度 3/24/48/72dp 可选（3dp 为最低档）
+- **字体与宿主同步**：自动使用 SPW 当前字体（内置 MiSans 或你自定义的字体）；字号可在信息页调节
+- **背景跟随窗口材质**：隐藏宿主内容区，面板背景直接透出 Windows 亚克力 / 云母材质，无截图残影；经典主题下用纯色
 - 点击左侧菜单切页、或点顶部标题栏按钮都不会误关面板；按 `Esc` 逐层退出（先关弹层，再关面板）
 - 面板下沿留空，避开迷你播放条
 - 跟随宿主深色/浅色主题；支持 SPW 壁纸背景

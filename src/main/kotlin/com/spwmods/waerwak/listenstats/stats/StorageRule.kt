@@ -31,12 +31,18 @@ object StorageRule {
         null
     }
 
+    /**
+     * 读取配置
+     *
+     * 每次都 reload：宿主配置页的控件可能用另一份 ConfigHelper 缓存保存，
+     * 不 reload 会一直读到启动时的旧值（为以后加 edittext 预留）。
+     */
     @Synchronized
     fun load() {
-        if (loaded) return
         loaded = true
         try {
             val h = helper() ?: return
+            h.reload()
             rawEventKeepDays =
                 ((h.get(KEY_RAW_KEEP_DAYS, 90) as? Number)?.toInt() ?: 90)
                     .coerceIn(LIMIT_MIN_DAYS, LIMIT_MAX_DAYS)

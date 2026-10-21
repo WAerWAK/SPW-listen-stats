@@ -105,7 +105,6 @@ object TitlebarButton {
                     if (OverlayInjection.panelOpen.value) {
                         OverlayInjection.closePanel()
                     } else {
-                        BackdropCapture.captureIfNeeded(UiStateStore.loadBackdropBlur())
                         OverlayInjection.panelOpen.value = true
                     }
                 }

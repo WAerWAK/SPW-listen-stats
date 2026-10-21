@@ -54,8 +54,6 @@ object CoverCache {
     /** 同时进行中的解码/请求数 */
     private const val MAX_PARALLEL = 8
 
-    private class Entry(val bitmap: ImageBitmap)
-
     /**
      * 内存缓存
      *
@@ -352,25 +350,58 @@ object CoverCache {
     /**
      * 解码并缩放到 128×128 的缩略图
      *
-     * 直接 decodeToImageBitmap 会按原始分辨率解码（一张 1000×1000 的封面 ≈ 4MB），
-     * 缓存几十张就会吃光内存；这里用 Skia 直接画到小画布上。
+     * 两点关键（对齐 Jethuit）：
+     * 1. **保持宽高比 + 居中裁剪**（cover）：直接拉伸会压扁横/纵向的非正方形封面。
+     * 2. **释放 Skia 资源**：Image / Surface 都是本地对象，不 close 会泄漏。
      */
     private fun decodeThumbnail(bytes: ByteArray): ImageBitmap? {
+        var source: org.jetbrains.skia.Image? = null
+        var surface: org.jetbrains.skia.Surface? = null
         try {
-            val source = org.jetbrains.skia.Image.makeFromEncoded(bytes)
-            val surface = org.jetbrains.skia.Surface.makeRasterN32Premul(THUMB_SIZE, THUMB_SIZE)
-            surface.canvas.drawImageRect(
-                source,
-                org.jetbrains.skia.Rect.makeWH(THUMB_SIZE.toFloat(), THUMB_SIZE.toFloat())
+            val img = org.jetbrains.skia.Image.makeFromEncoded(bytes)
+            source = img
+            if (img.width <= 0 || img.height <= 0) return null
+            val raster = org.jetbrains.skia.Surface.makeRasterN32Premul(THUMB_SIZE, THUMB_SIZE)
+            surface = raster
+            // cover：按较大比例缩放，保证填满整个缩略图，超出部分居中裁掉
+            val scale = maxOf(
+                THUMB_SIZE.toFloat() / img.width.toFloat(),
+                THUMB_SIZE.toFloat() / img.height.toFloat()
             )
-            val snapshot = surface.makeImageSnapshot()
-            return snapshot.toComposeImageBitmap()
+            val drawW = img.width * scale
+            val drawH = img.height * scale
+            raster.canvas.clear(0)
+            raster.canvas.drawImageRect(
+                img,
+                org.jetbrains.skia.Rect.makeWH(img.width.toFloat(), img.height.toFloat()),
+                org.jetbrains.skia.Rect.makeXYWH(
+                    (THUMB_SIZE - drawW) / 2f,
+                    (THUMB_SIZE - drawH) / 2f,
+                    drawW,
+                    drawH
+                ),
+                org.jetbrains.skia.SamplingMode.LINEAR,
+                null,
+                true
+            )
+            return raster.makeImageSnapshot().toComposeImageBitmap()
         } catch (t: Throwable) {
             // 缩放失败时退回原图解码
             return try {
                 bytes.decodeToImageBitmap()
             } catch (e: Throwable) {
                 null
+            }
+        } finally {
+            try {
+                surface?.close()
+            } catch (t: Throwable) {
+                // 忽略
+            }
+            try {
+                source?.close()
+            } catch (t: Throwable) {
+                // 忽略
             }
         }
     }

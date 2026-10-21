@@ -132,6 +132,9 @@ object StatsStore {
     var dataVersion: Long = 0L
         private set
 
+    /** 备份目录内的元数据文件名 */
+    private const val MANIFEST_FILE = "manifest.json"
+
     /** 备份全部数据到 zip（**纯只读操作，不改动任何源文件，也不触发加载/迁移**） */
     @Synchronized
     fun backupTo(target: File): String {
@@ -152,6 +155,12 @@ object StatsStore {
         var totalBytes = 0L
         try {
             zos = java.util.zip.ZipOutputStream(target.outputStream().buffered())
+            // 先写 manifest：恢复时可以先展示备份内容摘要再确认
+            val manifest = buildManifest(dir)
+            zos.putNextEntry(java.util.zip.ZipEntry(MANIFEST_FILE))
+            zos.write(manifest.toByteArray(Charsets.UTF_8))
+            zos.closeEntry()
+            written++
             if (dictFile.isFile) {
                 writeEntry(zos, dictFile, DICT_FILE)
                 written++
@@ -180,6 +189,79 @@ object StatsStore {
         if (written == 0) return "没有可备份的数据"
         log("备份完成：" + written + " 个文件，源数据共 " + totalBytes + " 字节 → " + target.absolutePath)
         return "已备份 " + written + " 个文件到 " + target.absolutePath
+    }
+
+    /**
+     * 生成备份元数据（只读统计，不触发加载）
+     *
+     * 恢复前用它告诉用户「这个备份里有什么」，避免盲目覆盖现有数据。
+     */
+    private fun buildManifest(dir: File): String {
+        var trackLines = 0
+        try {
+            val dict = File(dir, DICT_FILE)
+            if (dict.isFile) trackLines = dict.readLines().size
+        } catch (t: Throwable) {
+            trackLines = 0
+        }
+        var dayLines = 0
+        var eventLines = 0
+        for (name in arrayOf(DAILY_DIR, EVENTS_DIR)) {
+            val d = File(dir, name)
+            val files = d.listFiles()
+            if (files == null) continue
+            for (f in files) {
+                if (!f.isFile || !f.name.endsWith(".jsonl")) continue
+                val n = try {
+                    f.readLines().size
+                } catch (t: Throwable) {
+                    0
+                }
+                if (name == DAILY_DIR) dayLines += n else eventLines += n
+            }
+        }
+        // 事件文件名就是日期，取最早的 / 最晚的
+        var firstDay = ""
+        var lastDay = ""
+        val eventFiles = File(dir, EVENTS_DIR).listFiles()
+        if (eventFiles != null) {
+            for (f in eventFiles) {
+                if (!f.isFile || !f.name.endsWith(".jsonl")) continue
+                val day = f.name.removeSuffix(".jsonl")
+                if (firstDay.isEmpty() || day < firstDay) firstDay = day
+                if (day > lastDay) lastDay = day
+            }
+        }
+        val now = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ROOT).format(Date())
+        return "{\"v\":1,\"exportedAt\":\"" + now + "\",\"tracks\":" + trackLines +
+            ",\"dailyRows\":" + dayLines + ",\"events\":" + eventLines +
+            ",\"firstDay\":\"" + firstDay + "\",\"lastDay\":\"" + lastDay + "\"}"
+    }
+
+    /** 读取备份的元数据摘要（不修改任何数据）；null 表示旧版备份没有 manifest */
+    @Synchronized
+    fun inspectBackup(source: File): String? {
+        var zis: java.util.zip.ZipInputStream? = null
+        try {
+            zis = java.util.zip.ZipInputStream(source.inputStream().buffered())
+            while (true) {
+                val entry = zis.nextEntry ?: break
+                if (entry.name == MANIFEST_FILE) {
+                    val bytes = zis.readBytes()
+                    return String(bytes, Charsets.UTF_8)
+                }
+                zis.closeEntry()
+            }
+        } catch (t: Throwable) {
+            return null
+        } finally {
+            try {
+                zis?.close()
+            } catch (t: Throwable) {
+                // 忽略
+            }
+        }
+        return null
     }
 
     /** 追加一行到 listen-stats.log（排查用） */
@@ -679,6 +761,103 @@ object StatsStore {
             day = day.minusDays(1)
         }
         return streak
+    }
+
+    /** 历史最长连续收听天数 */
+    @Synchronized
+    fun longestStreak(): Int {
+        ensureLoaded()
+        val played = ArrayList<LocalDate>()
+        for (entry in days.entries) {
+            val d = entry.value
+            if (d.count <= 0 && d.listenedMs <= 0L) continue
+            val date = try {
+                LocalDate.parse(entry.key)
+            } catch (t: Throwable) {
+                continue
+            }
+            played.add(date)
+        }
+        if (played.isEmpty()) return 0
+        played.sortWith(Comparator { a, b -> a.compareTo(b) })
+        var best = 1
+        var run = 1
+        var i = 1
+        while (i < played.size) {
+            if (played[i] == played[i - 1].plusDays(1)) run++ else run = 1
+            if (run > best) best = run
+            i++
+        }
+        return best
+    }
+
+    /** 听得最多的一天（日期） */
+    @Synchronized
+    fun peakDay(): String {
+        ensureLoaded()
+        var bestDate = ""
+        var bestMs = 0L
+        for (entry in days.entries) {
+            val ms = entry.value.listenedMs
+            if (ms > bestMs) {
+                bestMs = ms
+                bestDate = entry.key
+            }
+        }
+        return bestDate
+    }
+
+    /** 听得最多的一天（时长） */
+    @Synchronized
+    fun peakMillis(): Long {
+        ensureLoaded()
+        var best = 0L
+        for (entry in days.entries) {
+            val ms = entry.value.listenedMs
+            if (ms > best) best = ms
+        }
+        return best
+    }
+
+    /** 每日平均收听时长（按「有听歌的天数」平均，对齐 Jethuit 口径） */
+    @Synchronized
+    fun dailyAverageMillis(): Long {
+        ensureLoaded()
+        var total = 0L
+        var active = 0
+        for (entry in days.entries) {
+            val ms = entry.value.listenedMs
+            if (ms <= 0L) continue
+            total += ms
+            active++
+        }
+        return if (active == 0) 0L else total / active
+    }
+
+    /** 最常听歌时段（0-23 小时中累计时长最大的那个）；无数据返回 -1 */
+    @Synchronized
+    fun favoriteHour(): Int {
+        ensureLoaded()
+        val totals = LongArray(24)
+        for (entry in days.entries) {
+            val hoursMs = entry.value.hoursMs
+            var h = 0
+            while (h < 24) {
+                totals[h] += hoursMs[h]
+                h++
+            }
+        }
+        var bestHour = -1
+        var bestMs = 0L
+        var h = 0
+        while (h < 24) {
+            if (totals[h] > bestMs) {
+                bestMs = totals[h]
+                bestHour = h
+            }
+            h++
+        }
+        return bestHour
     }
 
     private fun hasPlayOn(date: String): Boolean {
@@ -1243,41 +1422,6 @@ object StatsStore {
         if (remain > 0L) {
             onPart(dayFormat.format(Date(cursor)), 0, remain)
         }
-    }
-
-    /**
-     * 把一段收听时长按小时边界切开
-     *
-     * 例：20:55 开始听 8 分钟 → 20 点计入 5 分钟、21 点计入 3 分钟。
-     */
-    private fun splitByHour(startMs: Long, durationMs: Long, onPart: (hour: Int, ms: Long) -> Unit) {
-        if (durationMs <= 0L) return
-        var cursor = startMs
-        var remain = durationMs
-        var guard = 0
-        while (remain > 0L && guard < 26) {
-            val zdt = try {
-                java.time.Instant.ofEpochMilli(cursor).atZone(java.time.ZoneId.systemDefault())
-            } catch (t: Throwable) {
-                onPart(0, remain)
-                return
-            }
-            val hour = zdt.hour
-            val hourEnd = zdt.truncatedTo(java.time.temporal.ChronoUnit.HOURS)
-                .plusHours(1)
-                .toInstant()
-                .toEpochMilli()
-            if (hourEnd <= cursor) {
-                onPart(hour, remain)
-                return
-            }
-            val part = if (hourEnd - cursor < remain) hourEnd - cursor else remain
-            onPart(hour, part)
-            cursor += part
-            remain -= part
-            guard++
-        }
-        if (remain > 0L) onPart(23, remain)
     }
 
     private fun applyToMemory(event: PlayEvent) {

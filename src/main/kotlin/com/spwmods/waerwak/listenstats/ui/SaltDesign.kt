@@ -13,135 +13,140 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * 对齐 SaltUI 的桌面端设计 token
+ * 对齐 SaltUI / SPW 原版的桌面端设计 token
  *
- * 来源（Moriafly/SaltUI，Apache-2.0）：
- *  - `SaltColors.defaultDark()/defaultLight()`
- *  - `SaltShapesDefaults`（desktop）：small 4dp / medium 6dp / large 10dp
- *  - `SaltDimens`（desktop）：item 32dp / itemIcon 20dp / padding 16dp / subPadding 12dp
- *  - `SaltTextStyles`（desktop）：main 14sp / sub 12sp / paragraph 16sp / largeTitle 24sp SemiBold
+ * 数值来源：
+ *  - 着色/字号/圆角：SPW 1.19.0 经典浅深主题实测取样
+ *  - 尺寸：SaltUI desktop `SaltDimens`（padding 16dp）
  *
  * 圆角用自绘 Shape 实现（宿主把 RoundedCornerShape(Dp)/CornerSize(Dp) 都 R8 掉了）。
+ * 颜色统一走 [SaltPalette]，这里只放尺寸、形状与字排版。
  */
 object SaltDesign {
 
-    // ---------------------------------------------------------------- 深色
-    val highlight = Color(0xFF0088FF)
-    val text = Color(0xFFEBEEF1)
-    val subText = Color(0xBFE1E6EB)
-    val background = Color(0xFF0E1015)
-    val subBackground = Color(0x0FFFFFFF)
-    val card = Color(0xFF16181F)
-    val stroke = Color(0x1AFFFFFF)
-    val onHighlight = Color(0xFFFFFFFF)
-    val success = Color(0xFF63D18C)
-    val warning = Color(0xFFFFB84D)
-    val error = Color(0xFFFF6B6B)
-
-    // ---------------------------------------------------------------- 浅色（SaltUI defaultLight）
-    val lightHighlight = Color(0xFF0470E6)
-    val lightText = Color(0xFF1E1715)
-    val lightSubText = Color(0xFF8C8C8C)
-    val lightBackground = Color(0xFFF3F3F3)
-    val lightSubBackground = Color(0xCCFFFFFF)
-    val lightCard = Color(0xFFFFFFFF)
-    val lightOnHighlight = Color(0xFFFFFFFF)
-
-    // ---------------------------------------------------------------- 液态玻璃
-    val glass = Color(0x33FFFFFF)
-    val glassStrong = Color(0x5CFFFFFF)
-    val glassBorder = Color(0x4DFFFFFF)
-    val lightGlass = Color(0x66000000)
-    val lightGlassStrong = Color(0x99000000)
-    val lightGlassBorder = Color(0x33000000)
-
-    // ---------------------------------------------------------------- 尺寸（SaltUI dimens, desktop）
+    // ---------------------------------------------------------------- 尺寸
     val padding = 16.dp
     val subPadding = 14.dp
-    val item = 32.dp
-    val itemIcon = 20.dp
 
-    // ---------------------------------------------------------------- 形状（SaltUI shapes, desktop）
-    val shapeSmall: Shape = ExactRoundedShape(4f)
-    val shapeMedium: Shape = ExactRoundedShape(6f)
-    val shapeLarge: Shape = ExactRoundedShape(10f)
+    /** 信息页密集小按钮的高度（比标准控件矮，避免视觉过重） */
+    val segmentHeight = 26.dp
+
+    // ---------------------------------------------------------------- 形状（SPW 原版）
+    /** 内按钮（分段控件内部按钮）5dp */
+    val shapeInner: Shape = ExactRoundedShape(5f)
+    /** 封面缩略图圆角 4dp */
+    val shapeCover: Shape = ExactRoundedShape(4f)
+    /** 控件 / 输入框 8dp */
+    val shapeSmall: Shape = ExactRoundedShape(8f)
+    val shapeMedium: Shape = ExactRoundedShape(8f)
+    /** 卡片 / 分组容器 15dp */
+    val shapeLarge: Shape = ExactRoundedShape(15f)
     val circle: Shape = ExactRoundedShape(-1f)
 
-    // ---------------------------------------------------------------- 文字
-    val fontSizeMain = 14.sp
+    // ---------------------------------------------------------------- 文字（SPW 原版 AppType）
+    /** 页面大标题 27sp / 620 */
+    val fontSizeTitle = 27.sp
+    val weightTitle = FontWeight(620)
+    /** 分组标题 16sp SemiBold */
+    val fontSizeSectionTitle = 16.sp
+    val weightSectionTitle = FontWeight.SemiBold
+    /** 正文 13sp */
+    val fontSizeMain = 13.sp
+    /** 次级文字 12sp */
     val fontSizeSub = 12.sp
-    val fontSizeLabel = 13.sp
-    val fontSizeParagraph = 16.sp
-    val fontSizeTitle = 20.sp
-    val fontSizeKpi = 22.sp
-    val fontSizeLargeTitle = 24.sp
-    val weightLargeTitle = FontWeight.SemiBold
-    val weightMedium = FontWeight.Medium
+    /** KPI 数字 26sp / 550 */
+    val fontSizeKpi = 26.sp
+    val weightKpi = FontWeight(550)
+    /** KPI 单位 17sp（汉字取数字的 2/3） */
+    val fontSizeKpiUnit = 17.sp
 }
 
 /**
- * 一套完整的配色（深/浅两套，由宿主主题决定）
+ * 一套配色（深/浅 × 经典/材质）
+ *
+ * [isDark] 之外的所有字段都由宿主的深浅色决定；
+ * [saltPalette] 的 material=true 分支用于 DWM 材质（亚克力/云母）下的透明背景：
+ * 卡片与控件改为半透明覆盖层，让窗口材质透出来。
  */
-class SaltPalette(
+data class SaltPalette(
     val isDark: Boolean,
     val highlight: Color,
     val text: Color,
     val subText: Color,
-    /** 次级标签的浅蓝强调色（用于 KPI 标签等） */
+    /** 次级标签色（KPI 标签等），弱于 highlight */
     val labelAccent: Color,
     val background: Color,
     val card: Color,
     val subBackground: Color,
     val onHighlight: Color,
     val error: Color,
-    val glass: Color,
-    val glassStrong: Color,
-    val glassBorder: Color,
     val circleBackground: Color,
     val circleBackgroundStrong: Color,
-    val circleBorder: Color
+    val circleBorder: Color,
+    /** 弹窗/浮窗/下拉框的底：始终不透明（无遮罩时靠它保证可读性） */
+    val dialogSurface: Color
 )
 
-val SaltDarkPalette = SaltPalette(
+private val DarkClassic = SaltPalette(
     isDark = true,
-    highlight = Color(0xFF4CC2FF),
+    highlight = Color(0xFF79B5FF),
     text = Color(0xFFEBEEF1),
-    subText = Color(0xBFE1E6EB),
+    subText = Color(0xFFA0A3AB),
     labelAccent = Color(0xFF8FC7E8),
-    background = Color(0xFF1E262D),
-    // 卡片半透明，让磨砂背景透出来（叠在面板底色上仍接近原色）
-    card = Color(0xB81E262D),
-    // 悬停 / 选中态：12% 白（原 8% 偏弱）
-    subBackground = Color(0x1FFFFFFF),
+    background = Color(0xFF232323),
+    card = Color(0xFF2A2A2A),
+    subBackground = Color(0xFF2B2D32),
     onHighlight = Color(0xFF0E1418),
-    error = Color(0xFFFF6B6B),
-    glass = Color(0x33FFFFFF),
-    glassStrong = Color(0x5CFFFFFF),
-    glassBorder = Color(0x4DFFFFFF),
-    circleBackground = Color(0xE61E262D),
-    circleBackgroundStrong = Color(0xF2232C34),
-    circleBorder = Color(0x33FFFFFF)
+    error = Color(0xFFFF8A8A),
+    circleBackground = Color(0xE6232323),
+    circleBackgroundStrong = Color(0xF22A2C31),
+    circleBorder = Color(0x33FFFFFF),
+    dialogSurface = Color(0xFF2E2E2E)
 )
 
-val SaltLightPalette = SaltPalette(
+private val LightClassic = SaltPalette(
     isDark = false,
-    highlight = Color(0xFF4CC2FF),
-    text = Color(0xFF1E1715),
-    subText = Color(0xFF7A7A7A),
+    highlight = Color(0xFF2777D8),
+    text = Color(0xFF25272B),
+    subText = Color(0xFF777B82),
     labelAccent = Color(0xFF3A7EA6),
-    background = Color(0xFFFAFAFA),
-    // 卡片半透明（80% 白），让磨砂背景透出来
-    card = Color(0xCCFFFFFF),
-    subBackground = Color(0x99FFFFFF),
-    onHighlight = Color(0xFF0E1418),
-    error = Color(0xFFD32F2F),
-    glass = Color(0x66000000),
-    glassStrong = Color(0x99000000),
-    glassBorder = Color(0x33000000),
+    background = Color(0xFFF8F8F8),
+    card = Color(0xFFFCFCFC),
+    subBackground = Color(0xFFEDEEF1),
+    onHighlight = Color(0xFFFFFFFF),
+    error = Color(0xFFCF4545),
     circleBackground = Color(0xF2FFFFFF),
     circleBackgroundStrong = Color(0xFFFFFFFF),
-    circleBorder = Color(0x1A000000)
+    circleBorder = Color(0x1A000000),
+    dialogSurface = Color(0xFFFFFFFF)
 )
+
+/** 深色材质：卡片/控件 34% 中性灰覆盖（让 DWM 背景透出） */
+private val DarkMaterial = DarkClassic.copy(
+    background = Color.Transparent,
+    card = Color(0xFF7C7C7C).copy(alpha = 0.34f),
+    subBackground = Color(0xFF7C7C7C).copy(alpha = 0.34f),
+    subText = Color(0xFFCCD0D5).copy(alpha = 0.91f),
+    // 弹窗在用材质背景时保持不透明（否则文字读不清）
+    dialogSurface = Color(0xFF3A3A3A)
+)
+
+/** 浅色材质：卡片/控件 72% 不透明底 */
+private val LightMaterial = LightClassic.copy(
+    background = Color.Transparent,
+    card = LightClassic.card.copy(alpha = 0.72f),
+    subBackground = LightClassic.subBackground.copy(alpha = 0.72f),
+    dialogSurface = Color(0xFFF7F7F7)
+)
+
+val SaltDarkPalette: SaltPalette = DarkClassic
+val SaltLightPalette: SaltPalette = LightClassic
+
+/** 按 深浅 × 是否材质 取配色 */
+fun saltPalette(dark: Boolean, material: Boolean): SaltPalette {
+    if (dark) return if (material) DarkMaterial else DarkClassic
+    return if (material) LightMaterial else LightClassic
+}
 
 val LocalSaltPalette = staticCompositionLocalOf { SaltDarkPalette }
 

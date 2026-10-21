@@ -27,6 +27,10 @@ object UiStateStore {
     @Volatile
     private var contentPercent: Int = 80
 
+    /** 全局字体增加值（百分比，0–60）；0 = 保持原大小 */
+    @Volatile
+    private var fontExtraPercent: Int = 0
+
     /** 悬浮圆钮入口是否显示 */
     @Volatile
     private var entryEnabled: Boolean = true
@@ -40,17 +44,6 @@ object UiStateStore {
         return entryX to entryY
     }
 
-    /** 磨砂背景模糊强度（dp）；未设置时为 48 */
-    fun loadBackdropBlur(): Int {
-        ensureLoaded()
-        return backdropBlurDp
-    }
-
-    fun saveBackdropBlur(dp: Int) {
-        backdropBlurDp = dp
-        writeAll()
-    }
-
     /** 内容最大宽度百分比（未设置时为 80） */
     fun loadContentPercent(): Int {
         ensureLoaded()
@@ -59,6 +52,17 @@ object UiStateStore {
 
     fun saveContentPercent(percent: Int) {
         contentPercent = if (percent < 50) 50 else if (percent > 100) 100 else percent
+        writeAll()
+    }
+
+    /** 全局字体增加值（百分比，0–60）；0 = 保持原大小 */
+    fun loadFontExtraPercent(): Int {
+        ensureLoaded()
+        return fontExtraPercent
+    }
+
+    fun saveFontExtraPercent(percent: Int) {
+        fontExtraPercent = if (percent < 0) 0 else if (percent > 60) 60 else percent
         writeAll()
     }
 
@@ -84,17 +88,20 @@ object UiStateStore {
                     val text = file.readText()
                     val mx = Regex("\"entryX\"\\s*:\\s*(-?[0-9.eE+]+)").find(text)
                     val my = Regex("\"entryY\"\\s*:\\s*(-?[0-9.eE+]+)").find(text)
-                    val mb = Regex("\"blurDp\"\\s*:\\s*([0-9]+)").find(text)
                     val mc = Regex("\"contentPercent\"\\s*:\\s*([0-9]+)").find(text)
                     if (mx != null) mx.groupValues[1].toFloatOrNull()?.let { entryX = it }
                     if (my != null) my.groupValues[1].toFloatOrNull()?.let { entryY = it }
-                    if (mb != null) mb.groupValues[1].toIntOrNull()?.let { backdropBlurDp = it }
                     if (mc != null) {
                         val v = mc.groupValues[1].toIntOrNull()
                         if (v != null && v >= 50 && v <= 100) contentPercent = v
                     }
                     val me = Regex("\"entryEnabled\"\\s*:\\s*(true|false)").find(text)
                     if (me != null) entryEnabled = me.groupValues[1] == "true"
+                    val mf = Regex("\"fontExtraPercent\"\\s*:\\s*([0-9]+)").find(text)
+                    if (mf != null) {
+                        val v = mf.groupValues[1].toIntOrNull()
+                        if (v != null) fontExtraPercent = if (v < 0) 0 else if (v > 60) 60 else v
+                    }
                 }
             }
         } catch (t: Throwable) {
@@ -114,8 +121,9 @@ object UiStateStore {
             if (!dir.isDirectory) dir.mkdirs()
             File(dir, FILE_NAME).writeText(
                 "{\"entryX\":" + entryX + ",\"entryY\":" + entryY +
-                    ",\"blurDp\":" + backdropBlurDp + ",\"contentPercent\":" + contentPercent +
-                    ",\"entryEnabled\":" + entryEnabled + "}"
+                    ",\"contentPercent\":" + contentPercent +
+                    ",\"entryEnabled\":" + entryEnabled +
+                    ",\"fontExtraPercent\":" + fontExtraPercent + "}"
             )
         } catch (t: Throwable) {
             // 写入失败忽略，下次修改会再试

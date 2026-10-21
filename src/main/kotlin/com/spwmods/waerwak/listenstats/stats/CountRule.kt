@@ -43,10 +43,12 @@ object CountRule {
 
     @Synchronized
     fun load() {
-        if (loaded) return
         loaded = true
         try {
             val h = helper() ?: return
+            // 每次 reload：宿主配置页的控件可能用另一份 ConfigHelper 缓存保存，
+            // 不 reload 会读到启动时的旧值（为以后加 edittext 预留）。
+            h.reload()
             minSeconds = ((h.get(KEY_MIN_SEC, 5) as? Number)?.toInt() ?: 5).coerceIn(LIMIT_MIN_SEC, LIMIT_MAX_SEC)
             percent = ((h.get(KEY_PERCENT, 50) as? Number)?.toInt() ?: 50).coerceIn(0, 100)
             mode = if ((h.get(KEY_MODE, "max") as? String) == "min") "min" else "max"

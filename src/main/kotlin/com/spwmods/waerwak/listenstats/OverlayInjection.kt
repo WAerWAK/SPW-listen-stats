@@ -6,7 +6,6 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -70,11 +69,14 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import kotlin.math.roundToInt
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.spwmods.waerwak.listenstats.stats.AggregatePage
@@ -96,11 +98,10 @@ import com.spwmods.waerwak.listenstats.ui.LocalSaltPalette
 import com.spwmods.waerwak.listenstats.ui.SaltDarkPalette
 import com.spwmods.waerwak.listenstats.ui.SaltDesign
 import com.spwmods.waerwak.listenstats.ui.UiStateStore
-import com.spwmods.waerwak.listenstats.ui.WallpaperLoader
-import com.spwmods.waerwak.listenstats.ui.BackdropCapture
 import com.spwmods.waerwak.listenstats.ui.HostFont
 import com.spwmods.waerwak.listenstats.ui.rememberCover
 import com.spwmods.waerwak.listenstats.ui.SaltLightPalette
+import com.spwmods.waerwak.listenstats.ui.saltPalette
 import com.xuncorp.spw.workshop.api.PluginPermission
 import com.xuncorp.spw.workshop.api.UnstableSpwWorkshopApi
 import com.xuncorp.spw.workshop.api.WorkshopApi
@@ -114,24 +115,34 @@ import java.util.Locale
 /**
  * 全屏 Overlay + 边缘浮动入口
  *
- * Hook 目标用未混淆的可读名：不能直接 hook `Content`（AppNavigationKt 内有 2 处调用），
- * 因此 hook 编译器生成的访问器 `access$Content`（ComposableSingletons$AppNavigationKt 内唯一）。
+ * Hook 目标（SPW 1.19.0 已 javap 实测）：
+ * - `AppNavigationKt.AppNavigation(Composer, int)` 是顶层导航入口，
+ *   唯一调用点在混淆类 `androidx.compose.ui.\u06C4`（invokestatic 实测）。
+ * - 之前的 `access$Content` 在导航框架**内部**（仅覆盖内容区）；
+ *   迁到 `AppNavigation` 后覆盖整个窗口（含侧栏与顶栏），
+ *   这是背景材质方案（隐藏宿主内容 + 透明背景）的前提。
  */
 object OverlayInjection {
 
     private const val TARGET_CLASS = "com.xuncorp.voxzen.ui.navigation.AppNavigationKt"
-    private const val TARGET_METHOD = "access\$Content"
-    private const val TARGET_IN_CLASS =
-        "com.xuncorp.voxzen.ui.navigation.ComposableSingletons\$AppNavigationKt"
+    private const val TARGET_METHOD = "AppNavigation"
+    private const val TARGET_IN_CLASS = "androidx.compose.ui.\u06C4"
 
     @Volatile
     private var handle: HookHandle? = null
+
+    /** replaceComposable 的材质桥接层句柄（可选，失败静默降级） */
+    @Volatile
+    private var materialHandle: HookHandle? = null
 
     /** 面板开关状态（提到 object 级，快捷键才能切换） */
     val panelOpen = mutableStateOf(false)
 
     /** 内容最大宽度百分比（50–100，默认 80）：信息页可调，改后立即生效 */
     val contentPercent = mutableStateOf(80)
+
+    /** 全局字体增加值（百分比，0–60，默认 0）：所有字号同比例放大 */
+    val fontExtraPercent = mutableStateOf(0)
 
     /**
      * 悬浮圆钮入口是否显示
@@ -151,7 +162,6 @@ object OverlayInjection {
     /** 关闭面板（统一入口，导航/返回/浮钮共用） */
     fun closePanel() {
         panelOpen.value = false
-        com.spwmods.waerwak.listenstats.ui.BackdropCapture.reset()
     }
 
     /**
@@ -272,6 +282,7 @@ object OverlayInjection {
             }
             // 读取 UI 状态（内容宽度百分比等）
             contentPercent.value = UiStateStore.loadContentPercent()
+            fontExtraPercent.value = UiStateStore.loadFontExtraPercent()
             entryEnabled.value = UiStateStore.loadEntryEnabled()
             // 导航感知：切页时关面板，返回键优先关弹层/面板（失败不影响主功能）
             com.spwmods.waerwak.listenstats.ui.NavigationHook.install(
@@ -292,6 +303,20 @@ object OverlayInjection {
             )
             // 标题栏入口（失败静默降级，浮钮仍在）
             com.spwmods.waerwak.listenstats.ui.TitlebarButton.install()
+            // 背景材质桥接层（可选）：替换宿主 AppNavigation 调用，面板打开时隐藏宿主内容
+            // 失败则静默降级为现有截图/不透明背景
+            try {
+                materialHandle = WorkshopApi.hookRegistrar.replaceComposable(
+                    className = TARGET_CLASS,
+                    methodName = TARGET_METHOD,
+                    inClass = TARGET_IN_CLASS
+                ) { _: UiHookCall ->
+                    com.spwmods.waerwak.listenstats.ui.HostMaterialLayer()
+                }
+            } catch (t: Throwable) {
+                System.err.println("[listen-stats] 材质桥接层注册失败（降级为不透明背景）: ${t.message}")
+                materialHandle = null
+            }
             lastError = null
             "已注册：窗口右下角会出现一个「只露一点」的圆"
         } catch (t: Throwable) {
@@ -311,6 +336,14 @@ object OverlayInjection {
         } catch (t: Throwable) {
             System.err.println("[listen-stats] 卸载标题栏按钮失败: ${t.message}")
         }
+        try {
+            materialHandle?.unhook()
+        } catch (t: Throwable) {
+            System.err.println("[listen-stats] 卸载材质桥接层失败: ${t.message}")
+        }
+        materialHandle = null
+        com.spwmods.waerwak.listenstats.ui.HostMaterialState.bridgeAvailable = false
+        com.spwmods.waerwak.listenstats.ui.HostMaterialState.hidden = false
         try {
             handle?.unhook()
         } catch (t: Throwable) {
@@ -403,7 +436,7 @@ object StatsActions {
         }
     }
 
-    /** 弹出对话框：从备份恢复 */
+    /** 弹出对话框：从备份恢复（先展示备份内容摘要，确认后才覆盖） */
     @JvmStatic
     @JvmName("restoreDataDialog")
     fun restoreDataDialog() {
@@ -413,10 +446,44 @@ object StatsActions {
                 fd.isVisible = true
                 val dir = fd.directory
                 val name = fd.file
-                if (dir != null && name != null) {
-                    val result = StatsStore.restoreFrom(java.io.File(dir, name))
-                    toast(result, result.startsWith("已恢复"))
+                if (dir == null || name == null) return@invokeLater
+                val file = java.io.File(dir, name)
+
+                // 读 manifest 摘要：让用户知道这个备份里有什么（旧版备份没有 manifest）
+                val manifest = try {
+                    StatsStore.inspectBackup(file)
+                } catch (t: Throwable) {
+                    null
                 }
+                val summary = if (manifest == null) {
+                    "备份文件：" + file.name + "\n（旧版备份，无内容摘要）"
+                } else {
+                    val tracks = com.spwmods.waerwak.listenstats.stats.JsonLite.long(manifest, "tracks")
+                    val days = com.spwmods.waerwak.listenstats.stats.JsonLite.long(manifest, "dailyRows")
+                    val events = com.spwmods.waerwak.listenstats.stats.JsonLite.long(manifest, "events")
+                    val at = com.spwmods.waerwak.listenstats.stats.JsonLite.string(manifest, "exportedAt", "—")
+                    val first = com.spwmods.waerwak.listenstats.stats.JsonLite.string(manifest, "firstDay", "")
+                    val last = com.spwmods.waerwak.listenstats.stats.JsonLite.string(manifest, "lastDay", "")
+                    val span = if (first.isBlank() && last.isBlank()) "—" else first + " ~ " + last
+                    "备份文件：" + file.name + "\n" +
+                        "导出时间：" + at + "\n" +
+                        "曲目字典：" + tracks + " 条\n" +
+                        "日聚合行：" + days + " 行\n" +
+                        "播放明细：" + events + " 条\n" +
+                        "日期范围：" + span
+                }
+                val message = summary + "\n\n" +
+                    "恢复会用备份内容替换当前统计：\n" +
+                    "当前数据会改名为 .bak 保留（不删除）。\n\n确认恢复吗？"
+                val choice = javax.swing.JOptionPane.showConfirmDialog(
+                    null, message, "恢复听歌统计",
+                    javax.swing.JOptionPane.YES_NO_OPTION,
+                    javax.swing.JOptionPane.WARNING_MESSAGE
+                )
+                if (choice != javax.swing.JOptionPane.YES_OPTION) return@invokeLater
+
+                val result = StatsStore.restoreFrom(file)
+                toast(result, result.startsWith("已恢复"))
             } catch (t: Throwable) {
                 toast("恢复失败：" + t.message, false)
             }
@@ -512,11 +579,10 @@ private fun OverlayHost() {
     var hovered by remember { mutableStateOf(false) }
     val opened = OverlayInjection.panelOpen.value
 
-    // 关闭面板（含浮钮状态与背景底图的复位）
+    // 关闭面板（含浮钮状态复位）
     val closePanel: () -> Unit = {
         OverlayInjection.panelOpen.value = false
         hovered = false
-        BackdropCapture.reset()
     }
 
     // 面板外部关闭时也复位悬停态（Navigator hook 与 AWT 监听两条路径都走这里）
@@ -536,7 +602,7 @@ private fun OverlayHost() {
                 event.button == java.awt.event.MouseEvent.BUTTON1
             ) {
                 val bounds = OverlayInjection.contentBoundsInWindow
-                val window = BackdropCapture.hostWindow()
+                val window = com.spwmods.waerwak.listenstats.ui.HostWindow.find()
                 if (bounds != null && window != null) {
                     val origin = window.locationOnScreen
                     val wx = event.xOnScreen - origin.x
@@ -571,18 +637,38 @@ private fun OverlayHost() {
 
     // 同步宿主的深浅色与字体
     val dark = HostAppearance.isDarkTheme()
-    val palette = if (dark) SaltDarkPalette else SaltLightPalette
+    // 材质模式（桥接层生效 + DWM 材质）：卡片/控件用半透明覆盖层，让窗口材质透出
+    val materialActive = com.spwmods.waerwak.listenstats.ui.HostMaterialState.bridgeAvailable &&
+        HostAppearance.isMaterialStyle()
+    val palette = saltPalette(dark, materialActive)
     val hostFont = remember { HostFont.family() }
 
-    // 每次打开面板：清空封面失败冷却，让上一次没加载出来的封面重新尝试
+    // 全局字体增加值：通过覆盖 Density.fontScale 实现（sp 变大，dp 不变）
+    val fontExtra = OverlayInjection.fontExtraPercent.value
+    val baseDensity = LocalDensity.current
+    val scaledDensity = remember(baseDensity, fontExtra) {
+        Density(
+            density = baseDensity.density,
+            fontScale = baseDensity.fontScale * (1f + fontExtra / 100f)
+        )
+    }
+
+    // 每次打开面板：清空封面失败冷却，并隐藏宿主内容（背景材质桥接层）
     LaunchedEffect(opened) {
-        if (opened) com.spwmods.waerwak.listenstats.ui.CoverCache.resetFailures()
+        if (opened) {
+            com.spwmods.waerwak.listenstats.ui.CoverCache.resetFailures()
+            com.spwmods.waerwak.listenstats.ui.HostMaterialState.hidden = true
+        } else {
+            com.spwmods.waerwak.listenstats.ui.HostMaterialState.hidden = false
+        }
     }
 
     MaterialTheme(colorScheme = darkColorScheme(primary = palette.highlight)) {
         CompositionLocalProvider(
             LocalSaltPalette provides palette,
-            LocalTextStyle provides androidx.compose.ui.text.TextStyle(fontFamily = hostFont)
+            LocalTextStyle provides androidx.compose.ui.text.TextStyle(fontFamily = hostFont),
+            // 字体大小设置：只改 fontScale，dp 布局不受影响
+            androidx.compose.ui.platform.LocalDensity provides scaledDensity
         ) {
             // 无论面板开关，都记录一次 overlay 覆盖的内容区矩形：
             // 首次打开面板时也要靠它把截图限制在内容区（排除侧栏与顶栏）
@@ -610,8 +696,6 @@ private fun OverlayHost() {
                                 hovered = hovered,
                                 onHoverChange = { hovered = it },
                                 onClick = {
-                                    // 必须在面板出现之前截图，否则会把面板自己拍进去
-                                    BackdropCapture.captureIfNeeded(UiStateStore.loadBackdropBlur())
                                     OverlayInjection.panelOpen.value = true
                                 }
                             )
@@ -831,6 +915,7 @@ private fun StatsOverlay(onClose: () -> Unit) {
     val liveKey = tick * 100000 + liveTick
     var showThresholdEditor by remember { mutableStateOf(false) }
     var showRetentionEditor by remember { mutableStateOf(false) }
+    var showFontSizeEditor by remember { mutableStateOf(false) }
     var dayDetailDate by remember { mutableStateOf("") }
 
     // Esc：AWT 层拦截（逐层关闭：弹层 → 面板）
@@ -840,7 +925,8 @@ private fun StatsOverlay(onClose: () -> Unit) {
             showThresholdEditor = false
         } else if (showRetentionEditor) {
             showRetentionEditor = false
-        } else if (dayDetailDate.isNotEmpty()) {
+            } else if (dayDetailDate.isNotEmpty()) {
+                dayDetailDate = ""
             dayDetailDate = ""
         } else if (TrackDetailState.open.value != null) {
             TrackDetailState.open.value = null
@@ -862,7 +948,8 @@ private fun StatsOverlay(onClose: () -> Unit) {
             showThresholdEditor = false
         } else if (showRetentionEditor) {
             showRetentionEditor = false
-        } else if (dayDetailDate.isNotEmpty()) {
+            } else if (dayDetailDate.isNotEmpty()) {
+                dayDetailDate = ""
             dayDetailDate = ""
         } else if (TrackDetailState.open.value != null) {
             TrackDetailState.open.value = null
@@ -887,7 +974,14 @@ private fun StatsOverlay(onClose: () -> Unit) {
         }
     }
 
-    Surface(modifier = Modifier.fillMaxSize(), color = LocalSaltPalette.current.background) {
+    // 背景模式判定要提前到根 Surface 之前：根 Surface 的颜色会盖住内部所有背景绘制
+    val bridgeAvailable = com.spwmods.waerwak.listenstats.ui.HostMaterialState.bridgeAvailable
+    val materialStyle = HostAppearance.isMaterialStyle()
+    val transparentRoot = bridgeAvailable && materialStyle
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = if (transparentRoot) Color.Transparent else LocalSaltPalette.current.background
+    ) {
     Box(
         Modifier.fillMaxSize()
             .onGloballyPositioned { coords ->
@@ -926,32 +1020,15 @@ private fun StatsOverlay(onClose: () -> Unit) {
                 }
             }
     ) {
-    // 背景优先级：截图底图 > 壁纸 > 纯色
-    // 注意：不加任何纯色遮罩——加了会与 SPW 其余部分的色调/亮度对不上（「背景色」的来源）
-    val backdrop = BackdropCapture.bitmapState.value
-    val wallpaper = remember { WallpaperLoader.load() }
-    if (backdrop != null) {
+    // 背景：材质样式 → 透明（让 DWM 亚克力/云母透出）；经典样式 → 纯色。截图方案已移除
+    val bridgeOn = com.spwmods.waerwak.listenstats.ui.HostMaterialState.bridgeAvailable
+    if (!(bridgeOn && materialStyle)) {
+        val darkBg = LocalSaltPalette.current.isDark
         Box(
             Modifier.fillMaxSize().drawBehind {
-                drawImage(
-                    image = backdrop,
-                    dstSize = IntSize(size.width.toInt(), size.height.toInt())
-                )
+                drawRect(if (darkBg) Color(0xFF232323) else Color(0xFFF8F8F8))
             }
         )
-    } else if (wallpaper != null) {
-        Box(
-            Modifier.fillMaxSize().drawBehind {
-                drawImage(
-                    image = wallpaper,
-                    dstSize = IntSize(size.width.toInt(), size.height.toInt())
-                )
-            }
-        )
-        Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = if (LocalSaltPalette.current.isDark) Color(0xD11E262D) else Color(0xD1FAFAFA)
-        ) {}
     }
     // 底部留 76dp：避开浮动胶囊迷你播放条（面板内容不被遮挡）
     Column(
@@ -992,7 +1069,8 @@ private fun StatsOverlay(onClose: () -> Unit) {
                             else -> InfoTab(
                                 liveKey,
                                 onEditThreshold = { showThresholdEditor = true },
-                                onEditRetention = { showRetentionEditor = true }
+                                onEditRetention = { showRetentionEditor = true },
+                                onEditFontSize = { showFontSizeEditor = true }
                             )
                         }
                     }
@@ -1014,6 +1092,14 @@ private fun StatsOverlay(onClose: () -> Unit) {
         RetentionEditor(
             onDismiss = {
                 showRetentionEditor = false
+                tick = tick + 1
+            }
+        )
+    }
+    if (showFontSizeEditor) {
+        FontSizeEditor(
+            onDismiss = {
+                showFontSizeEditor = false
                 tick = tick + 1
             }
         )
@@ -1063,6 +1149,7 @@ private fun HeaderBar(onClose: () -> Unit, onRefresh: () -> Unit) {
         Text(
             "听歌统计",
             fontSize = SaltDesign.fontSizeTitle,
+            fontWeight = SaltDesign.weightTitle,
             color = p.text
         )
         Spacer(Modifier.width(10.dp))
@@ -1242,15 +1329,33 @@ private fun TabIcon(kind: Int, color: Color) {
 private fun OverviewTab(tick: Int) {
     val snapshot = remember(tick) { StatsStore.snapshot(10, 10) }
     val streak = remember(tick) { StatsStore.currentStreak() }
+    val longest = remember(tick) { StatsStore.longestStreak() }
+    // 累计收听的三态格式：0=时分 1=天时分 2=天数小数（点击循环）
+    var durationMode by remember { mutableStateOf(0) }
 
     Column(Modifier.fillMaxWidth()) {
         SaltGroup {
             GroupHeader("总览")
             Row(Modifier.fillMaxWidth()) {
+                // 累计收听：点击循环切换三种格式
+                KpiCellParts(
+                    label = "累计收听",
+                    parts = durationParts(snapshot.totalMs, durationMode),
+                    modifier = Modifier.weight(1f),
+                    onClick = { durationMode = (durationMode + 1) % 3 }
+                )
                 KpiCell("总播放次数", snapshot.totalCount.toString(), Modifier.weight(1f))
-                KpiCell("累计收听", formatMs(snapshot.totalMs), Modifier.weight(1f))
                 KpiCell("曲目数", snapshot.trackCount.toString(), Modifier.weight(1f))
-                KpiCell("连续收听", streak.toString() + " 天", Modifier.weight(1f))
+                KpiCellParts(
+                    label = "连续收听",
+                    parts = listOf(streak.toString() to "天"),
+                    modifier = Modifier.weight(1f)
+                )
+                KpiCellParts(
+                    label = "最长连续",
+                    parts = listOf(longest.toString() to "天"),
+                    modifier = Modifier.weight(1f)
+                )
             }
         }
         Spacer(Modifier.height(12.dp))
@@ -1296,6 +1401,178 @@ private fun OverviewTab(tick: Int) {
                 }
             }
         }
+        Spacer(Modifier.height(12.dp))
+        // 听歌小结（三项，对齐 Jethuit）
+        val peakDate = remember(tick) { StatsStore.peakDay() }
+        val peakMs = remember(tick) { StatsStore.peakMillis() }
+        val avgMs = remember(tick) { StatsStore.dailyAverageMillis() }
+        val favHour = remember(tick) { StatsStore.favoriteHour() }
+        SaltGroup {
+            GroupHeader("听歌小结")
+            Row(Modifier.fillMaxWidth()) {
+                SummaryStat(
+                    label = if (peakDate.isNotBlank()) "听得最多 · " + peakDate else "听得最多",
+                    parts = if (peakMs > 0L) durationParts(peakMs, 0) else listOf("—" to ""),
+                    modifier = Modifier.weight(1f)
+                )
+                SummaryStat(
+                    label = "每日平均收听",
+                    parts = if (avgMs > 0L) durationParts(avgMs, 0) else listOf("—" to ""),
+                    modifier = Modifier.weight(1f)
+                )
+                SummaryStat(
+                    label = "最常听歌时段",
+                    // 数字 26sp，尾巴 :00 用 2/3 字号（与其它汉字单位一致）
+                    parts = if (favHour >= 0) {
+                        listOf(
+                            pad2(favHour) to ":00 — ",
+                            pad2((favHour + 1) % 24) to ":00"
+                        )
+                    } else {
+                        listOf("—" to "")
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+}
+
+/** 补零到两位 */
+private fun pad2(value: Int): String {
+    // 手动补零：不经 String.format，避免宿主裁剪相关重载
+    return if (value < 10) "0" + value.toString() else value.toString()
+}
+
+/**
+ * 把时长拆成「数值 + 单位」片段，供数字/单位分级字号渲染
+ *
+ * mode 0 = 时/分（不足一小时只显示分）
+ * mode 1 = 天/时/分
+ * mode 2 = 天数小数（保留两位）
+ *
+ * 分钟四舍五入（满 30 秒进位）；显示层处理，不影响已记录数据。
+ */
+private fun durationParts(ms: Long, mode: Int): List<Pair<String, String>> {
+    if (ms <= 0L) return listOf("0" to "分")
+    val totalMinutes = ms / 60_000L + if (ms % 60_000L >= 30_000L) 1L else 0L
+    if (mode == 2) {
+        // 天数保留两位小数（用整数运算避免精度误差）
+        val hundredths = (ms * 100L + 43_200_000L) / 86_400_000L
+        val whole = hundredths / 100L
+        val frac = hundredths % 100L
+        val fracText = if (frac < 10L) "0" + frac.toString() else frac.toString()
+        return listOf((whole.toString() + "." + fracText) to "天")
+    }
+    val days = totalMinutes / 1440L
+    val hours = (totalMinutes % 1440L) / 60L
+    val minutes = totalMinutes % 60L
+    if (mode == 1) {
+        // 「天」总是显示（不足一天也显示 0 天），与「时」保持一致的三段式
+        val list = ArrayList<Pair<String, String>>(3)
+        list.add(days.toString() to "天")
+        list.add(hours.toString() to "时")
+        if (minutes > 0L) list.add((if (minutes < 10) "0" + minutes else minutes.toString()) to "分")
+        return list
+    }
+    if (hours > 0L) {
+        val list = ArrayList<Pair<String, String>>(2)
+        list.add(hours.toString() to "时")
+        if (minutes > 0L) list.add((if (minutes < 10) "0" + minutes else minutes.toString()) to "分")
+        return list
+    }
+    return listOf(minutes.toString() to "分")
+}
+
+/** 数值 + 单位分字号（单位取数字的一半），可选点击（仅内容区可点，不含标题） */
+@Composable
+private fun KpiCellParts(
+    label: String,
+    parts: List<Pair<String, String>>,
+    modifier: Modifier,
+    onClick: (() -> Unit)? = null
+) {
+    val p = LocalSaltPalette.current
+    Column(modifier) {
+        Text(label, fontSize = SaltDesign.fontSizeSub, color = p.labelAccent)
+        Spacer(Modifier.height(6.dp))
+        val row: @Composable () -> Unit = {
+            Row(verticalAlignment = Alignment.Bottom) {
+                var i = 0
+                while (i < parts.size) {
+                    val part = parts[i]
+                    Text(
+                        part.first,
+                        fontSize = SaltDesign.fontSizeKpi,
+                        fontWeight = SaltDesign.weightKpi,
+                        color = p.highlight
+                    )
+                    if (part.second.isNotEmpty()) {
+                        Spacer(Modifier.width(2.dp))
+                        Text(
+                            part.second,
+                            fontSize = SaltDesign.fontSizeKpiUnit,
+                            color = p.highlight,
+                            modifier = Modifier.padding(bottom = 3.dp)
+                        )
+                    }
+                    if (i < parts.size - 1) Spacer(Modifier.width(2.dp))
+                    i++
+                }
+            }
+        }
+        if (onClick != null) {
+            // 只让数值行可点；局部关闭 48dp 最小交互区，避免把宽度挤开
+            androidx.compose.runtime.CompositionLocalProvider(
+                androidx.compose.material3.LocalMinimumInteractiveComponentSize provides 0.dp
+            ) {
+                Surface(
+                    onClick = onClick,
+                    color = androidx.compose.ui.graphics.Color.Transparent,
+                    shape = SaltDesign.shapeSmall
+                ) {
+                    row()
+                }
+            }
+        } else {
+            row()
+        }
+    }
+}
+
+/** 听歌小结单项（标签在上、数值在下；汉字单位取数字的 2/3） */
+@Composable
+private fun SummaryStat(
+    label: String,
+    parts: List<Pair<String, String>>,
+    modifier: Modifier
+) {
+    val p = LocalSaltPalette.current
+    Column(modifier) {
+        Text(label, fontSize = SaltDesign.fontSizeSub, color = p.labelAccent)
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.Bottom) {
+            var i = 0
+            while (i < parts.size) {
+                val part = parts[i]
+                Text(
+                    part.first,
+                    fontSize = SaltDesign.fontSizeKpi,
+                    fontWeight = SaltDesign.weightKpi,
+                    color = p.highlight
+                )
+                if (part.second.isNotEmpty()) {
+                    Spacer(Modifier.width(1.dp))
+                    Text(
+                        part.second,
+                        fontSize = SaltDesign.fontSizeKpiUnit,
+                        color = p.highlight,
+                        modifier = Modifier.padding(bottom = 2.dp)
+                    )
+                }
+                i++
+            }
+        }
     }
 }
 
@@ -1307,14 +1584,15 @@ private fun GroupHeader(title: String) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Surface(
-            shape = SaltDesign.shapeSmall,
+            shape = SaltDesign.shapeInner,
             color = LocalSaltPalette.current.highlight,
-            modifier = Modifier.size(width = 4.dp, height = 22.dp)
+            modifier = Modifier.size(width = 3.dp, height = 16.dp)
         ) {}
-        Spacer(Modifier.width(10.dp))
+        Spacer(Modifier.width(8.dp))
         Text(
             title,
-            fontSize = 26.sp,
+            fontSize = SaltDesign.fontSizeSectionTitle,
+            fontWeight = SaltDesign.weightSectionTitle,
             color = LocalSaltPalette.current.text
         )
     }
@@ -1353,11 +1631,12 @@ private fun CompactListRow(coverId: String, title: String, summary: String, valu
 @Composable
 private fun KpiCell(label: String, value: String, modifier: Modifier) {
     Column(modifier) {
-        Text(label, fontSize = 20.sp, color = LocalSaltPalette.current.labelAccent)
+        Text(label, fontSize = SaltDesign.fontSizeSub, color = LocalSaltPalette.current.labelAccent)
         Spacer(Modifier.height(6.dp))
         Text(
             value,
-            fontSize = 32.sp,
+            fontSize = SaltDesign.fontSizeKpi,
+            fontWeight = SaltDesign.weightKpi,
             color = LocalSaltPalette.current.highlight
         )
     }
@@ -1381,12 +1660,10 @@ private fun SaltGroup(
     }
 }
 
+/** 行分隔线：SPW 原版无行间分隔线，只保留等高空白（1dp 占位避免行距跳动） */
 @Composable
 private fun RowDivider() {
-    Surface(
-        modifier = Modifier.fillMaxWidth().height(1.dp),
-        color = LocalSaltPalette.current.subText.copy(alpha = 0.08f)
-    ) {}
+    Box(Modifier.fillMaxWidth().height(1.dp))
 }
 
 // ---------------------------------------------------------------- Tab: 排行（歌曲 / 专辑 / 艺术家 合并）
@@ -1828,7 +2105,9 @@ private fun ActivityHeatmap(
     val gridWidth = (cellDp + gap) * weeks - gap
     val gridHeight = (cellDp + gap) * 7 - gap
     val cellPx = with(dLocal) { cellDp.toPx() }
-    val labelSize = (cellDp.value * 0.55f).coerceIn(9f, 14f).sp
+    // 月份 / 星期标签固定字号，不跟随「字体大小」设置（用 fontScale 反向补偿）
+    val fixedLabelSize = ((cellDp.value * 0.62f).coerceIn(11f, 15f) / dLocal.fontScale).sp
+    val labelSize = fixedLabelSize
 
     // 统计摘要
     val summary = remember(tick, yearMode) {
@@ -1886,7 +2165,7 @@ private fun ActivityHeatmap(
                     modifier = Modifier.width(136.dp),
                     // 不给 containerColor 会取 MaterialTheme 的 surface——浅色主题下可能是深色，
                     // 与我们的浅色文本撞成黑底黑字
-                    containerColor = p.background
+                    containerColor = p.dialogSurface
                 ) {
                     var oi = 0
                     while (oi < years.size && oi < 8) {
@@ -2088,7 +2367,7 @@ private fun ActivityHeatmap(
                     if (topPx < 0f) topPx = 0f
                     Surface(
                         shape = SaltDesign.shapeMedium,
-                        color = p.card,
+                        color = p.dialogSurface,
                         shadowElevation = 14.dp,
                         border = BorderStroke(1.dp, SolidColor(p.subText.copy(alpha = 0.18f))),
                         modifier = Modifier
@@ -2281,12 +2560,21 @@ private fun DurationChart(
 
         Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            // 说明行：普通描述 + 强调色的平均值（两者分开以便分别着色）
             Text(
                 RangeBuckets.describe(from, to) + " · " + RangeBuckets.granularityLabel(from, to),
                 fontSize = SaltDesign.fontSizeSub,
-                color = p.subText,
-                modifier = Modifier.weight(1f)
+                color = p.subText
             )
+            if (average > 0f && buckets.size > 1) {
+                val unit = if (!byTime) " 次" else if (axisMax >= 3_600_000f) " 小时" else " 分钟"
+                Text(
+                    " · 平均 " + axisTickLabel(average, byTime, axisMax, axisMax / 4f) + unit,
+                    fontSize = SaltDesign.fontSizeSub,
+                    color = p.highlight
+                )
+            }
+            Spacer(Modifier.weight(1f))
             Row {
                 UnderlineTab("次数", !byTime, Modifier.width(54.dp), height = 28.dp) { onByTime(false) }
                 UnderlineTab("时长", byTime, Modifier.width(54.dp), height = 28.dp) { onByTime(true) }
@@ -2294,33 +2582,35 @@ private fun DurationChart(
         }
 
         Spacer(Modifier.height(10.dp))
+        // 轴单位标题单独一行，不占刻度区高度（之前放在刻度列内会把刻度整体推偏 22dp）
+        Row(Modifier.fillMaxWidth().height(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                axisTitle,
+                fontSize = 10.sp,
+                color = p.subText,
+                modifier = Modifier.width(40.dp)
+            )
+        }
+        Spacer(Modifier.height(4.dp))
         Row(Modifier.fillMaxWidth()) {
-            // Y 轴：竖排标题 + 刻度
-            Column(
-                Modifier.width(40.dp).padding(top = 4.dp),
-                horizontalAlignment = Alignment.End
-            ) {
-                Row(Modifier.height(14.dp)) {
+            // Y 轴刻度：与图表同高（170dp），文字垂直中心对齐网格线
+            val labelLineH = 13.dp
+            Box(Modifier.width(40.dp).height(170.dp)) {
+                var g = 4
+                while (g >= 0) {
+                    val tickValue = axisMax * g / 4f
+                    // g=4 → y=0（顶），g=0 → y=170dp（底）
+                    val centerY = 170.dp * (4 - g) / 4f
                     Text(
-                        axisTitle,
+                        axisTickLabel(tickValue, byTime, axisMax, axisMax / 4f),
                         fontSize = 10.sp,
+                        lineHeight = 13.sp,
                         color = p.subText,
-                        modifier = Modifier.weight(1f),
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Start
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .offset(y = centerY - labelLineH / 2)
                     )
-                }
-                Spacer(Modifier.height(4.dp))
-                Column(
-                    Modifier.height(170.dp),
-                    verticalArrangement = Arrangement.SpaceBetween,
-                    horizontalAlignment = Alignment.End
-                ) {
-                    var g = 4
-                    while (g >= 0) {
-                        val tickValue = axisMax * g / 4f
-                        Text(axisTickLabel(tickValue, byTime, axisMax), fontSize = 10.sp, color = p.subText)
-                        g--
-                    }
+                    g--
                 }
             }
             Spacer(Modifier.width(6.dp))
@@ -2443,17 +2733,7 @@ private fun DurationChart(
                                     p.highlight,
                                     style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.2f * density)
                                 )
-                                // 平均线
-                                if (average > 0f && n > 1) {
-                                    val avgRatio = average / axisMax
-                                    val y = size.height - size.height * avgRatio
-                                    drawLine(
-                                        color = p.text.copy(alpha = 0.35f),
-                                        start = Offset(0f, y),
-                                        end = Offset(size.width, y),
-                                        strokeWidth = 1.2f * density
-                                    )
-                                }
+                                // 平均线统一在叠加层画（虚线 + 标签），这里不再重复绘制
                             }
                         )
                         // 折线图的悬停：按最近点
@@ -2484,6 +2764,51 @@ private fun DurationChart(
                             }
                         }
                     }
+                    // 叠加层：平均虚线 + 十字光标（在柱/线之上、浮窗之下）
+                    Box(
+                        Modifier.fillMaxSize().drawBehind {
+                            if (buckets.isEmpty()) return@drawBehind
+                            // 平均虚线
+                            if (average > 0f && buckets.size > 1 && axisMax > 0f) {
+                                val avgY = size.height - size.height * (average / axisMax).coerceIn(0f, 1f)
+                                drawLine(
+                                    color = p.subText.copy(alpha = 0.6f),
+                                    start = Offset(0f, avgY),
+                                    end = Offset(size.width, avgY),
+                                    strokeWidth = 1.2f,
+                                    pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(
+                                        floatArrayOf(6f, 5f)
+                                    )
+                                )
+                                // 平均线只画虚线；数值改在图表上方说明行里显示（避免在图表内压住图形）
+                            }
+                            // 十字光标：竖向虚线 + 实心数据点
+                            if (hovered >= 0 && hovered < buckets.size) {
+                                val n = buckets.size
+                                val cx = if (chartType == 0 || n == 1) {
+                                    (hovered + 0.5f) * size.width / n
+                                } else {
+                                    hovered * size.width / (n - 1).toFloat()
+                                }
+                                drawLine(
+                                    color = p.subText.copy(alpha = 0.45f),
+                                    start = Offset(cx, 0f),
+                                    end = Offset(cx, size.height),
+                                    strokeWidth = 1f,
+                                    pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(
+                                        floatArrayOf(3f, 4f)
+                                    )
+                                )
+                                val ratio = if (axisMax > 0f) values[hovered] / axisMax else 0f
+                                val cy = size.height - size.height * ratio.coerceIn(0f, 1f)
+                                drawCircle(
+                                    color = p.highlight,
+                                    radius = 4f,
+                                    center = Offset(cx, cy)
+                                )
+                            }
+                        }
+                    )
                     // 悬浮卡片：跟随鼠标（绝对定位，不参与布局）
                     if (hovered >= 0 && hovered < buckets.size && mouseX >= 0f) {
                         val bucket = buckets[hovered]
@@ -2498,7 +2823,7 @@ private fun DurationChart(
                         if (topPx < 0f) topPx = mouseY + 16f
                         Surface(
                             shape = SaltDesign.shapeMedium,
-                            color = p.card,
+                            color = p.dialogSurface,
                             shadowElevation = 14.dp,
                             border = BorderStroke(1.dp, SolidColor(p.subText.copy(alpha = 0.18f))),
                             modifier = Modifier
@@ -2586,17 +2911,18 @@ private fun ChartTypeGlyph(kind: Int, color: Color) {
     )
 }
 
-/** 把最大值抬到“整”刻度（1/2/5 × 10^n） */
+/** 把最大值抬到「整」刻度（1/2/5 × 10^n），并留 12% 顶部余量避免最高柱贴顶 */
 private fun niceAxisMax(value: Float): Float {
     if (value <= 0f) return 1f
-    val exp = Math.floor(Math.log10(value.toDouble())).toInt()
+    val padded = value * 1.12f
+    val exp = Math.floor(Math.log10(padded.toDouble())).toInt()
     var base = 1.0
     var e = 0
     while (e < exp) {
         base *= 10.0
         e++
     }
-    val norm = value / base
+    val norm = padded / base
     val niceNorm = when {
         norm <= 1.0 -> 1.0
         norm <= 2.0 -> 2.0
@@ -2606,22 +2932,44 @@ private fun niceAxisMax(value: Float): Float {
     return (niceNorm * base).toFloat()
 }
 
-/** Y 轴单位标题 */
+/** Y 轴单位标题：只有小时 / 分钟两档（短文案，避免 40dp 列宽截断） */
 private fun axisUnitMs(axisMax: Float): String {
-    return when {
-        axisMax >= 3_600_000f -> "时长/小时"
-        axisMax >= 60_000f -> "时长/分钟"
-        else -> "时长/秒"
+    return if (axisMax >= 3_600_000f) "小时" else "分钟"
+}
+
+/** 毫秒值换算成当前轴单位下的数值 */
+private fun axisValueMs(value: Float, axisMax: Float): Double {
+    val unit = if (axisMax >= 3_600_000f) 3_600_000.0 else 60_000.0
+    return value / unit
+}
+
+/**
+ * 按刻度间隔的小数位格式化，避免「0 / 0 / 0 / 1」这种截断重复
+ *
+ * 例：step=0.5 → 输出 0、0.5、1、1.5、2；step=10 → 输出 0、10、20
+ */
+private fun formatAxisNumber(value: Double, step: Double): String {
+    val safeStep = if (step <= 0.0) 1.0 else step
+    val digits = try {
+        java.math.BigDecimal.valueOf(safeStep).stripTrailingZeros().scale().coerceIn(0, 2)
+    } catch (t: Throwable) {
+        0
+    }
+    return try {
+        java.math.BigDecimal.valueOf(value)
+            .setScale(digits, java.math.RoundingMode.HALF_UP)
+            .stripTrailingZeros()
+            .toPlainString()
+    } catch (t: Throwable) {
+        value.toLong().toString()
     }
 }
 
 /** Y 轴刻度文字（单位由标题承担，这里只给数字） */
-private fun axisTickLabel(value: Float, byTime: Boolean, axisMax: Float): String {
+private fun axisTickLabel(value: Float, byTime: Boolean, axisMax: Float, step: Float): String {
     if (!byTime) return value.toInt().toString()
     if (value <= 0f) return "0"
-    if (axisMax >= 3_600_000f) return (value / 3_600_000f).toInt().toString()
-    if (axisMax >= 60_000f) return (value / 60_000f).toInt().toString()
-    return (value / 1000f).toInt().toString()
+    return formatAxisNumber(axisValueMs(value, axisMax), axisValueMs(step, axisMax))
 }
 
 /** monotone cubic 插值：平滑但不会过冲（不产生假峰值） */
@@ -2649,285 +2997,9 @@ private fun monotonePath(pts: List<androidx.compose.ui.geometry.Offset>): androi
     return path
 }
 
-/** 24 小时分布柱状图（旧实现，保留供参考） */
-@Composable
-private fun HourChart(
-    width: androidx.compose.ui.unit.Dp,
-    tick: Int,
-    gran: Int,
-    anchor: LocalDate,
-    byTime: Boolean,
-    onGran: (Int) -> Unit,
-    onAnchor: (LocalDate) -> Unit,
-    onByTime: (Boolean) -> Unit
-) {
-    val p = LocalSaltPalette.current
-    val today = LocalDate.now()
-
-    var from = today
-    var to = today
-    var label = ""
-    var weekDates: Array<String>? = null
-    when (gran) {
-        0 -> {
-            from = anchor
-            to = anchor
-            label = anchor.toString() + "（" + weekdayText(anchor.toString()) + "）"
-        }
-        1 -> {
-            val mon = anchor.minusDays((anchor.dayOfWeek.value - 1).toLong())
-            from = mon
-            to = mon.plusDays(6)
-            label = mon.toString() + " ~ " + to.toString()
-            val arr = Array(7) { "" }
-            var d = 0
-            while (d < 7) {
-                arr[d] = mon.plusDays(d.toLong()).toString()
-                d++
-            }
-            weekDates = arr
-        }
-        2 -> {
-            from = anchor.withDayOfMonth(1)
-            to = anchor.withDayOfMonth(anchor.lengthOfMonth())
-            label = anchor.year.toString() + " 年 " + anchor.monthValue + " 月"
-        }
-        else -> {
-            from = anchor.withDayOfYear(1)
-            to = anchor.withDayOfYear(anchor.lengthOfYear())
-            label = anchor.year.toString() + " 年"
-        }
-    }
-
-    val profile = remember(gran, anchor, tick) {
-        StatsStore.hourProfile(from.toString(), to.toString())
-    }
-    val matrix = if (weekDates == null) null else remember(gran, anchor, tick) {
-        StatsStore.hourMatrix(weekDates!!)
-    }
-
-    val values = FloatArray(24)
-    var max = 0f
-    var i = 0
-    while (i < 24) {
-        val v = if (byTime) profile.ms[i].toFloat() else profile.counts[i].toFloat()
-        values[i] = v
-        if (v > max) max = v
-        i++
-    }
-
-    var started by remember(gran, anchor, byTime) { mutableStateOf(false) }
-    LaunchedEffect(gran, anchor, byTime) { started = true }
-    val progress by animateFloatAsState(
-        targetValue = if (started) 1f else 0f,
-        animationSpec = tween(durationMillis = 380),
-        label = "hour-appear"
-    )
-
-    val hovered = HourHover.index.value
-
-    Column(Modifier.width(width)) {
-        // 粒度切换（Tab 卡片样式，无图标）
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            var g = 0
-            while (g < 4) {
-                val idx = g
-                val active = gran == idx
-                Surface(
-                    onClick = { onGran(idx) },
-                    shape = SaltDesign.shapeMedium,
-                    color = if (active) p.subBackground else Color.Transparent,
-                    border = BorderStroke(
-                        1.dp,
-                        SolidColor(if (active) p.highlight else p.subText.copy(alpha = 0.18f))
-                    ),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Box(Modifier.height(38.dp), contentAlignment = Alignment.Center) {
-                        Text(
-                            granLabels[idx],
-                            fontSize = SaltDesign.fontSizeMain,
-                            color = if (active) p.highlight else p.subText
-                        )
-                    }
-                }
-                g++
-            }
-        }
-        Spacer(Modifier.height(10.dp))
-        // 左侧日期导航 + 右侧次数/时长（同一行）
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            NavBar(
-                label = label,
-                canNext = to.isBefore(today),
-                onPrev = { onAnchor(shiftAnchor(gran, anchor, -1L)) },
-                onNext = { if (to.isBefore(today)) onAnchor(shiftAnchor(gran, anchor, 1L)) },
-                onPick = if (gran == 3) null else {
-                    {
-                        CalState.gran.value = gran
-                        CalState.seed.value = anchor
-                        CalState.open.value = true
-                    }
-                },
-                modifier = Modifier.weight(2f)
-            )
-            Spacer(Modifier.width(10.dp))
-            Row(Modifier.weight(1f)) {
-                UnderlineTab("次数", !byTime, Modifier.weight(1f), height = 32.dp) { onByTime(false) }
-                UnderlineTab("时长", byTime, Modifier.weight(1f), height = 32.dp) { onByTime(true) }
-            }
-        }
-        Spacer(Modifier.height(10.dp))
-        Row(
-            Modifier.fillMaxWidth().height(126.dp),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(3.dp)
-        ) {
-            var h = 0
-            while (h < 24) {
-                val stack = if (matrix == null) null else buildDayStack(matrix, h)
-                var total = 0
-                if (stack != null) {
-                    var d = 0
-                    while (d < stack.size) {
-                        total += stack[d]
-                        d++
-                    }
-                }
-                HourBar(
-                    index = h,
-                    ratio = if (max > 0f) values[h] / max else 0f,
-                    progress = progress,
-                    text = if (byTime) shortMs(profile.ms[h]) else profile.counts[h].toString(),
-                    stack = stack,
-                    stackTotal = total,
-                    highlight = hovered == h,
-                    modifier = Modifier.weight(1f)
-                )
-                h++
-            }
-        }
-        Spacer(Modifier.height(6.dp))
-        Row(Modifier.fillMaxWidth()) {
-            var h2 = 0
-            while (h2 < 24) {
-                val text = when (h2) {
-                    0 -> "0"
-                    6 -> "6"
-                    12 -> "12"
-                    18 -> "18"
-                    23 -> "23"
-                    else -> ""
-                }
-                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                    if (text.isNotEmpty()) {
-                        Text(text, fontSize = 10.sp, color = p.subText)
-                    }
-                }
-                h2++
-            }
-        }
-        Spacer(Modifier.height(6.dp))
-        if (hovered >= 0 && hovered < 24) {
-            Text(
-                hovered.toString() + " 点 · " + profile.counts[hovered] + " 次 · " + formatMs(profile.ms[hovered]),
-                fontSize = SaltDesign.fontSizeMain,
-                color = p.highlight
-            )
-        } else {
-            Text(
-                "把鼠标移到柱子上查看该时段详情",
-                fontSize = SaltDesign.fontSizeSub,
-                color = p.subText
-            )
-        }
-        if (matrix != null) {
-            Spacer(Modifier.height(8.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                var d = 0
-                while (d < 7) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Surface(
-                            color = p.highlight.copy(alpha = 0.22f + 0.11f * d),
-                            shape = SaltDesign.shapeSmall,
-                            modifier = Modifier.size(10.dp)
-                        ) {}
-                        Spacer(Modifier.width(4.dp))
-                        Text(weekdayShort(d), fontSize = 10.sp, color = p.subText)
-                    }
-                    d++
-                }
-            }
-        }
-    }
-}
 
 
 /** 日期导航条：‹ [标签 📅] ›，中间点击打开日历 */
-@Composable
-private fun NavBar(
-    label: String,
-    canNext: Boolean,
-    onPrev: () -> Unit,
-    onNext: () -> Unit,
-    onPick: (() -> Unit)?,
-    modifier: Modifier = Modifier
-) {
-    val p = LocalSaltPalette.current
-    Surface(shape = SaltDesign.shapeMedium, color = p.subBackground, modifier = modifier) {
-        Row(
-            Modifier.fillMaxWidth().height(32.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Surface(
-                onClick = onPrev,
-                shape = SaltDesign.shapeSmall,
-                color = Color.Transparent,
-                modifier = Modifier.width(30.dp).height(32.dp)
-            ) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    ChevronGlyph(left = true, color = p.subText)
-                }
-            }
-            if (onPick != null) {
-                Surface(
-                    onClick = onPick,
-                    shape = SaltDesign.shapeSmall,
-                    color = Color.Transparent,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Row(
-                        Modifier.fillMaxWidth().height(32.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Text(label, fontSize = SaltDesign.fontSizeSub, color = p.text)
-                        Spacer(Modifier.width(6.dp))
-                        CalendarGlyph(p.highlight.copy(alpha = 0.9f))
-                    }
-                }
-            } else {
-                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                    Text(label, fontSize = SaltDesign.fontSizeSub, color = p.text)
-                }
-            }
-            Surface(
-                onClick = onNext,
-                shape = SaltDesign.shapeSmall,
-                color = Color.Transparent,
-                modifier = Modifier.width(30.dp).height(32.dp)
-            ) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    ChevronGlyph(
-                        left = false,
-                        color = if (canNext) p.subText else p.subText.copy(alpha = 0.25f)
-                    )
-                }
-            }
-        }
-    }
-}
-
 /** 小日历图标 */
 @Composable
 private fun CalendarGlyph(color: Color) {
@@ -2980,8 +3052,6 @@ private object HourHover {
     val index = mutableStateOf(-1)
 }
 
-private val granLabels = arrayOf("日", "周", "月", "年")
-
 /** 日历弹窗状态（由面板层渲染） */
 private object CalState {
     val open = mutableStateOf(false)
@@ -2991,17 +3061,6 @@ private object CalState {
 
     /** 自定义范围选择目标：0 = 开始日期，1 = 结束日期 */
     val pickTarget = mutableStateOf(0)
-}
-
-/** 月历悬浮的日期（用于计算整周半激活） */
-private object WeekHover {
-    val date = mutableStateOf<LocalDate?>(null)
-}
-
-private fun isSameWeek(a: LocalDate, b: LocalDate): Boolean {
-    val ma = a.minusDays((a.dayOfWeek.value - 1).toLong())
-    val mb = b.minusDays((b.dayOfWeek.value - 1).toLong())
-    return ma == mb
 }
 
 /** 月历 / 月选择器（按粒度切换形态） */
@@ -3030,11 +3089,16 @@ private fun CalendarPicker(
 
     Box(
         Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { }
-            .drawBehind { drawRect(Color(0xB3000000)) },
+            .onPointerEvent(PointerEventType.Press) { onDismiss() }
+            .onPointerEvent(PointerEventType.Press) { onDismiss() },
         contentAlignment = Alignment.Center
     ) {
-        Surface(shape = SaltDesign.shapeLarge, color = p.card, shadowElevation = 18.dp) {
+        Surface(
+            shape = SaltDesign.shapeLarge,
+            color = p.dialogSurface,
+            shadowElevation = 18.dp,
+            modifier = Modifier.onPointerEvent(PointerEventType.Press) { e -> e.changes.forEach { ch -> ch.consume() } }
+        ) {
             Column(Modifier.width(360.dp).padding(16.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Surface(
@@ -3147,11 +3211,16 @@ private fun WeekPicker(
 
     Box(
         Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { }
-            .drawBehind { drawRect(Color(0xB3000000)) },
+            .onPointerEvent(PointerEventType.Press) { onDismiss() }
+            .onPointerEvent(PointerEventType.Press) { onDismiss() },
         contentAlignment = Alignment.Center
     ) {
-        Surface(shape = SaltDesign.shapeLarge, color = p.card, shadowElevation = 18.dp) {
+        Surface(
+            shape = SaltDesign.shapeLarge,
+            color = p.dialogSurface,
+            shadowElevation = 18.dp,
+            modifier = Modifier.onPointerEvent(PointerEventType.Press) { e -> e.changes.forEach { ch -> ch.consume() } }
+        ) {
             Column(Modifier.width(420.dp).padding(16.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Surface(
@@ -3255,11 +3324,16 @@ private fun MonthPicker(
 
     Box(
         Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { }
-            .drawBehind { drawRect(Color(0xB3000000)) },
+            .onPointerEvent(PointerEventType.Press) { onDismiss() }
+            .onPointerEvent(PointerEventType.Press) { onDismiss() },
         contentAlignment = Alignment.Center
     ) {
-        Surface(shape = SaltDesign.shapeLarge, color = p.card, shadowElevation = 18.dp) {
+        Surface(
+            shape = SaltDesign.shapeLarge,
+            color = p.dialogSurface,
+            shadowElevation = 18.dp,
+            modifier = Modifier.onPointerEvent(PointerEventType.Press) { e -> e.changes.forEach { ch -> ch.consume() } }
+        ) {
             Column(Modifier.width(340.dp).padding(16.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Surface(
@@ -3275,7 +3349,7 @@ private fun MonthPicker(
                     Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
                         Text(
                             year.toString() + " 年",
-                            fontSize = SaltDesign.fontSizeParagraph,
+                            fontSize = SaltDesign.fontSizeMain,
                             color = p.text
                         )
                     }
@@ -3344,23 +3418,6 @@ private fun MonthPicker(
         }
     }
 }
-private fun buildDayStack(matrix: Array<IntArray>, hour: Int): IntArray {
-    val out = IntArray(matrix.size)
-    var d = 0
-    while (d < matrix.size) {
-        out[d] = matrix[d][hour]
-        d++
-    }
-    return out
-}
-
-private fun shiftAnchor(gran: Int, anchor: LocalDate, delta: Long): LocalDate = when (gran) {
-    0 -> anchor.plusDays(delta)
-    1 -> anchor.plusWeeks(delta)
-    2 -> anchor.plusMonths(delta)
-    else -> anchor.plusYears(delta)
-}
-
 private fun weekdayShort(index: Int): String = when (index) {
     0 -> "一"
     1 -> "二"
@@ -3370,85 +3427,6 @@ private fun weekdayShort(index: Int): String = when (index) {
     5 -> "六"
     else -> "日"
 }
-
-private fun shortMs(ms: Long): String {
-    if (ms <= 0L) return "0"
-    if (ms < 60_000L) return (ms / 1000L).toString() + "s"
-    val minutes = ms / 60_000L
-    if (minutes < 60L) return minutes.toString() + "m"
-    return (minutes / 60L).toString() + "h" + (minutes % 60L) + "m"
-}
-
-/** 单根柱子：柱顶显示值；周视图时按天分层堆叠（底部最早 → 顶部最近） */
-@Composable
-private fun HourBar(
-    index: Int,
-    ratio: Float,
-    progress: Float,
-    text: String,
-    stack: IntArray?,
-    stackTotal: Int,
-    highlight: Boolean,
-    modifier: Modifier = Modifier
-) {
-    val p = LocalSaltPalette.current
-    val scale by animateFloatAsState(
-        targetValue = if (highlight) 1.12f else 1f,
-        animationSpec = tween(durationMillis = 150),
-        label = "bar-scale"
-    )
-    val barH = (6f + ratio * 76f) * progress
-    Column(
-        modifier
-            .onPointerEvent(PointerEventType.Enter) { HourHover.index.value = index }
-            .onPointerEvent(PointerEventType.Exit) {
-                if (HourHover.index.value == index) HourHover.index.value = -1
-            },
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Box(Modifier.height(16.dp), contentAlignment = Alignment.Center) {
-            if (ratio > 0f && progress > 0.5f) {
-                Text(
-                    text,
-                    fontSize = if (highlight) 11.sp else 9.sp,
-                    color = if (highlight) p.highlight else p.subText
-                )
-            }
-        }
-        Box(
-            Modifier.fillMaxWidth().height(barH.dp).graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-                transformOrigin = TransformOrigin(0.5f, 1f)
-            }
-        ) {
-            if (stack != null && stackTotal > 0) {
-                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
-                    var d = stack.size - 1
-                    while (d >= 0) {
-                        val frac = stack[d].toFloat() / stackTotal.toFloat()
-                        if (frac > 0f) {
-                            Surface(
-                                color = p.highlight.copy(alpha = 0.22f + 0.11f * d),
-                                modifier = Modifier.fillMaxWidth().weight(frac)
-                            ) {}
-                        }
-                        d--
-                    }
-                }
-            } else {
-                Surface(
-                    shape = SaltDesign.shapeSmall,
-                    color = if (ratio > 0f) p.highlight.copy(alpha = 0.35f + 0.65f * ratio)
-                    else p.subText.copy(alpha = 0.15f),
-                    modifier = Modifier.fillMaxSize()
-                ) {}
-            }
-        }
-    }
-}
-
-private val levelSamples = intArrayOf(0, 1, 3, 6, 10)
 
 /** 热力图配色：按「当天收听时长」档位（0=无，1–4 递增）而非次数 */
 private fun heatColor(level: Int, dark: Boolean): Color {
@@ -3578,13 +3556,13 @@ private fun ThresholdEditor(onDismiss: () -> Unit) {
 
     Box(
         Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { }
-            .drawBehind { drawRect(Color(0xB3000000)) },
+            .onPointerEvent(PointerEventType.Press) { onDismiss() }
+            .onPointerEvent(PointerEventType.Press) { onDismiss() },
         contentAlignment = Alignment.Center
     ) {
         Surface(
             shape = SaltDesign.shapeLarge,
-            color = p.card,
+            color = p.dialogSurface,
             shadowElevation = 18.dp
         ) {
             Column(Modifier.width(460.dp).padding(20.dp)) {
@@ -3684,11 +3662,16 @@ private fun GroupDetailDialog(payload: String, onDismiss: () -> Unit) {
 
     Box(
         Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { }
-            .drawBehind { drawRect(Color(0xB3000000)) },
+            .onPointerEvent(PointerEventType.Press) { onDismiss() }
+            .onPointerEvent(PointerEventType.Press) { onDismiss() },
         contentAlignment = Alignment.Center
     ) {
-        Surface(shape = SaltDesign.shapeLarge, color = p.card, shadowElevation = 18.dp) {
+        Surface(
+            shape = SaltDesign.shapeLarge,
+            color = p.dialogSurface,
+            shadowElevation = 18.dp,
+            modifier = Modifier.onPointerEvent(PointerEventType.Press) { e -> e.changes.forEach { ch -> ch.consume() } }
+        ) {
             Column(Modifier.width(620.dp).padding(20.dp)) {
                 GroupHeader(if (byAlbum) "专辑" else "艺术家")
                 Text(
@@ -3788,11 +3771,16 @@ private fun TrackDetailDialog(trackKey: String, onDismiss: () -> Unit) {
 
     Box(
         Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { }
-            .drawBehind { drawRect(Color(0xB3000000)) },
+            .onPointerEvent(PointerEventType.Press) { onDismiss() }
+            .onPointerEvent(PointerEventType.Press) { onDismiss() },
         contentAlignment = Alignment.Center
     ) {
-        Surface(shape = SaltDesign.shapeLarge, color = p.card, shadowElevation = 18.dp) {
+        Surface(
+            shape = SaltDesign.shapeLarge,
+            color = p.dialogSurface,
+            shadowElevation = 18.dp,
+            modifier = Modifier.onPointerEvent(PointerEventType.Press) { e -> e.changes.forEach { ch -> ch.consume() } }
+        ) {
             Column(Modifier.width(580.dp).padding(20.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     TrackCover(agg?.id ?: "", 52.dp)
@@ -3800,7 +3788,7 @@ private fun TrackDetailDialog(trackKey: String, onDismiss: () -> Unit) {
                     Column(Modifier.weight(1f)) {
                         Text(
                             agg?.title?.ifBlank { "未知曲目" } ?: "未知曲目",
-                            fontSize = SaltDesign.fontSizeParagraph,
+                            fontSize = SaltDesign.fontSizeMain,
                             color = p.text
                         )
                         Spacer(Modifier.height(2.dp))
@@ -3913,11 +3901,16 @@ private fun DayDetailDialog(date: String, onDismiss: () -> Unit) {
 
     Box(
         Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { }
-            .drawBehind { drawRect(Color(0xB3000000)) },
+            .onPointerEvent(PointerEventType.Press) { onDismiss() }
+            .onPointerEvent(PointerEventType.Press) { onDismiss() },
         contentAlignment = Alignment.Center
     ) {
-        Surface(shape = SaltDesign.shapeLarge, color = p.card, shadowElevation = 18.dp) {
+        Surface(
+            shape = SaltDesign.shapeLarge,
+            color = p.dialogSurface,
+            shadowElevation = 18.dp,
+            modifier = Modifier.onPointerEvent(PointerEventType.Press) { e -> e.changes.forEach { ch -> ch.consume() } }
+        ) {
             Column(Modifier.width(560.dp).padding(20.dp)) {
                 GroupHeader(date + "（" + weekdayText(date) + "）")
                 Text(
@@ -4000,6 +3993,62 @@ private fun DayDetailDialog(date: String, onDismiss: () -> Unit) {
     }
 }
 
+/** 全局字体大小编辑弹层（所有字号同比例放大） */
+@Composable
+private fun FontSizeEditor(onDismiss: () -> Unit) {
+    var extra by remember { mutableStateOf(OverlayInjection.fontExtraPercent.value) }
+    val p = LocalSaltPalette.current
+    Box(
+        Modifier.fillMaxSize()
+            .onPointerEvent(PointerEventType.Press) { onDismiss() },
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = SaltDesign.shapeLarge,
+            color = p.dialogSurface,
+            shadowElevation = 18.dp,
+            modifier = Modifier.onPointerEvent(PointerEventType.Press) { e -> e.changes.forEach { ch -> ch.consume() } }
+        ) {
+            Column(Modifier.width(480.dp).padding(20.dp)) {
+                GroupHeader("字体大小")
+                StepperRow(
+                    label = "字体增加值",
+                    value = if (extra <= 0) "默认" else "+" + extra + "%",
+                    canMinus = extra > 0,
+                    canPlus = extra < 60,
+                    onMinus = { extra = (extra - 5).coerceAtLeast(0) },
+                    onPlus = { extra = (extra + 5).coerceAtMost(60) }
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "所有文字按相同比例放大，布局与间距不受影响；热力图的月份与星期标签固定大小，不跟随此设置",
+                    fontSize = SaltDesign.fontSizeSub,
+                    color = p.subText
+                )
+                Spacer(Modifier.height(16.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    SortChip("取消", selected = false, modifier = Modifier.width(96.dp)) { onDismiss() }
+                    Spacer(Modifier.width(10.dp))
+                    Surface(
+                        onClick = {
+                            OverlayInjection.fontExtraPercent.value = extra
+                            UiStateStore.saveFontExtraPercent(extra)
+                            onDismiss()
+                        },
+                        shape = SaltDesign.shapeSmall,
+                        color = p.highlight,
+                        modifier = Modifier.width(110.dp)
+                    ) {
+                        Box(Modifier.height(30.dp), contentAlignment = Alignment.Center) {
+                            Text("保存", fontSize = SaltDesign.fontSizeMain, color = p.onHighlight)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /** 明细保留天数编辑弹层 */
 @Composable
 private fun RetentionEditor(onDismiss: () -> Unit) {
@@ -4007,11 +4056,16 @@ private fun RetentionEditor(onDismiss: () -> Unit) {
     val p = LocalSaltPalette.current
     Box(
         Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { }
-            .drawBehind { drawRect(Color(0xB3000000)) },
+            .onPointerEvent(PointerEventType.Press) { onDismiss() }
+            .onPointerEvent(PointerEventType.Press) { onDismiss() },
         contentAlignment = Alignment.Center
     ) {
-        Surface(shape = SaltDesign.shapeLarge, color = p.card, shadowElevation = 18.dp) {
+        Surface(
+            shape = SaltDesign.shapeLarge,
+            color = p.dialogSurface,
+            shadowElevation = 18.dp,
+            modifier = Modifier.onPointerEvent(PointerEventType.Press) { e -> e.changes.forEach { ch -> ch.consume() } }
+        ) {
             Column(Modifier.width(480.dp).padding(20.dp)) {
                 GroupHeader("明细保留天数")
                 StepperRow(
@@ -4065,7 +4119,7 @@ private fun StepperRow(
         Text(label, fontSize = SaltDesign.fontSizeMain, color = p.text, modifier = Modifier.weight(1f))
         StepButton("−", canMinus, onMinus)
         Box(Modifier.width(96.dp), contentAlignment = Alignment.Center) {
-            Text(value, fontSize = SaltDesign.fontSizeParagraph, color = p.highlight)
+            Text(value, fontSize = SaltDesign.fontSizeMain, color = p.highlight)
         }
         StepButton("+", canPlus, onPlus)
     }
@@ -4083,7 +4137,7 @@ private fun StepButton(glyph: String, enabled: Boolean, onClick: () -> Unit) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text(
                 glyph,
-                fontSize = SaltDesign.fontSizeParagraph,
+                fontSize = SaltDesign.fontSizeMain,
                 color = if (enabled) p.text else p.subText.copy(alpha = 0.4f)
             )
         }
@@ -4091,63 +4145,26 @@ private fun StepButton(glyph: String, enabled: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun InfoTab(tick: Int, onEditThreshold: () -> Unit, onEditRetention: () -> Unit) {
+private fun InfoTab(
+    tick: Int,
+    onEditThreshold: () -> Unit,
+    onEditRetention: () -> Unit,
+    onEditFontSize: () -> Unit
+) {
     val p = LocalSaltPalette.current
     val snap = remember(tick) { HostProbe.snapshot() }
     val dir = StatsStore.dataDirOrNull()?.absolutePath ?: "-"
     val trackCount = StatsStore.snapshot(1, 0).trackCount
     val eventLines = StatsStore.replayedLineCount()
+    val bridgeOn = com.spwmods.waerwak.listenstats.ui.HostMaterialState.bridgeAvailable
 
     Column(Modifier.fillMaxWidth()) {
-        // 两列瀑布流：左列=插件+宿主，右列=采集+数据（各列内部紧挨，互不拉伸）
+        // 两列瀑布流，各列内部紧挨
+        // 左列：提示 → 插件 → 采集 → 宿主
+        // 右列：显示 → 数据 → 诊断
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Column(Modifier.weight(1f)) {
-                SaltGroup {
-                    GroupHeader("插件")
-                    ItemRow("名称", "听歌统计")
-                    RowDivider()
-                    ItemRow("版本", snap.pluginVersion)
-                    RowDivider()
-                    ItemRow("插件 ID", snap.pluginId)
-                    RowDivider()
-                    ItemRow("渠道", snap.channel)
-                }
-                Spacer(Modifier.height(12.dp))
-                SaltGroup {
-                    GroupHeader("采集")
-                    Row(
-                        Modifier.fillMaxWidth().height(30.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "计数门槛",
-                            fontSize = SaltDesign.fontSizeMain,
-                            color = p.text,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Text(CountRule.describe(), fontSize = SaltDesign.fontSizeSub, color = p.subText)
-                        Spacer(Modifier.width(8.dp))
-                        Surface(
-                            onClick = onEditThreshold,
-                            shape = SaltDesign.shapeSmall,
-                            color = p.highlight.copy(alpha = 0.16f)
-                        ) {
-                            Box(
-                                Modifier.height(24.dp).padding(horizontal = 10.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text("调整", fontSize = SaltDesign.fontSizeSub, color = p.highlight)
-                            }
-                        }
-                    }
-                    RowDivider()
-                    ItemRow("播放状态", if (snap.isPlaying) "播放中" else "未播放")
-                    RowDivider()
-                    ItemRow("位置回调", snap.positionCallbacks.toString() + " 次")
-                    RowDivider()
-                    ItemRow("当前曲目", snap.lastTrackText)
-                }
-                Spacer(Modifier.height(12.dp))
+                // ------------------------------------------------ 提示（置顶）
                 SaltGroup {
                     GroupHeader("提示")
                     Column(Modifier.padding(vertical = 6.dp)) {
@@ -4170,14 +4187,42 @@ private fun InfoTab(tick: Int, onEditThreshold: () -> Unit, onEditRetention: () 
                         )
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            "计数门槛、明细保留天数、模糊强度、内容宽度可直接在本页调整",
+                            "计数门槛、明细保留天数、字体大小、内容宽度可在本页调整",
                             fontSize = SaltDesign.fontSizeSub,
                             color = p.subText
                         )
                     }
                 }
-            }
-            Column(Modifier.weight(1f)) {
+                Spacer(Modifier.height(12.dp))
+                // ------------------------------------------------ 插件
+                SaltGroup {
+                    GroupHeader("插件")
+                    ItemRow("名称", "听歌统计")
+                    RowDivider()
+                    ItemRow("版本", snap.pluginVersion)
+                    RowDivider()
+                    ItemRow("插件 ID", snap.pluginId)
+                    RowDivider()
+                    ItemRow("渠道", snap.channel)
+                }
+                Spacer(Modifier.height(12.dp))
+                // ------------------------------------------------ 采集（采集规则 + 实时状态）
+                SaltGroup {
+                    GroupHeader("采集")
+                    AdjustableRow(
+                        label = "计数门槛",
+                        value = CountRule.describe(),
+                        onClick = onEditThreshold
+                    )
+                    RowDivider()
+                    ItemRow("播放状态", if (snap.isPlaying) "播放中" else "未播放")
+                    RowDivider()
+                    ItemRow("位置回调", snap.positionCallbacks.toString() + " 次")
+                    RowDivider()
+                    ItemRow("当前曲目", snap.lastTrackText)
+                }
+                Spacer(Modifier.height(12.dp))
+                // ------------------------------------------------ 宿主
                 SaltGroup {
                     GroupHeader("宿主")
                     ItemRow("SPW 版本", snap.spwVersion)
@@ -4186,58 +4231,19 @@ private fun InfoTab(tick: Int, onEditThreshold: () -> Unit, onEditRetention: () 
                     RowDivider()
                     ItemRow("Compose", snap.composeVersion)
                 }
-                Spacer(Modifier.height(12.dp))
+            }
+            Column(Modifier.weight(1f)) {
+                // ------------------------------------------------ 显示（字体 / 字号 / 宽度）
                 SaltGroup {
-                    GroupHeader("数据")
-                    ItemRow("曲目数", trackCount.toString() + " 首")
-                    RowDivider()
-                    ItemRow("事件行数", eventLines.toString())
-                    RowDivider()
-                    Column(Modifier.padding(vertical = 6.dp)) {
-                        Text("存储占用", fontSize = SaltDesign.fontSizeMain, color = p.text)
-                        Spacer(Modifier.height(3.dp))
-                        Text(
-                            StatsStore.storageSummary(),
-                            fontSize = SaltDesign.fontSizeSub,
-                            color = p.subText
-                        )
-                    }
-                    RowDivider()
-                    Row(
-                        Modifier.fillMaxWidth().height(30.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "明细保留",
-                            fontSize = SaltDesign.fontSizeMain,
-                            color = p.text,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Text(StorageRule.describe(), fontSize = SaltDesign.fontSizeSub, color = p.subText)
-                        Spacer(Modifier.width(8.dp))
-                        Surface(
-                            onClick = onEditRetention,
-                            shape = SaltDesign.shapeSmall,
-                            color = p.highlight.copy(alpha = 0.16f)
-                        ) {
-                            Box(
-                                Modifier.height(24.dp).padding(horizontal = 10.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text("调整", fontSize = SaltDesign.fontSizeSub, color = p.highlight)
-                            }
-                        }
-                    }
-                    RowDivider()
-                    ItemRow("壁纸", WallpaperLoader.lastDiagnostics)
-                    RowDivider()
+                    GroupHeader("显示")
                     ItemRow("字体", HostFont.lastDiagnostics)
                     RowDivider()
-                    ItemRow("背景", BackdropCapture.statusState.value)
-                    RowDivider()
-                    ItemRow("封面缓存", com.spwmods.waerwak.listenstats.ui.CoverCache.statsText())
-                    RowDivider()
-                    ItemRow("标题栏按钮", com.spwmods.waerwak.listenstats.ui.TitlebarButton.statusText())
+                    AdjustableRow(
+                        label = "字体大小",
+                        value = if (OverlayInjection.fontExtraPercent.value <= 0) "默认"
+                        else "+" + OverlayInjection.fontExtraPercent.value + "%",
+                        onClick = onEditFontSize
+                    )
                     RowDivider()
                     Row(
                         Modifier.fillMaxWidth().height(34.dp),
@@ -4264,29 +4270,67 @@ private fun InfoTab(tick: Int, onEditThreshold: () -> Unit, onEditRetention: () 
                             }
                         }
                     }
+                }
+                Spacer(Modifier.height(12.dp))
+                // ------------------------------------------------ 数据（统计量 + 保留策略 + 位置）
+                SaltGroup {
+                    GroupHeader("数据")
+                    ItemRow("曲目数", trackCount.toString() + " 首")
                     RowDivider()
-                    Row(
-                        Modifier.fillMaxWidth().height(34.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                    ItemRow("事件行数", eventLines.toString())
+                    RowDivider()
+                    Column(Modifier.padding(vertical = 6.dp)) {
+                        Text("存储占用", fontSize = SaltDesign.fontSizeMain, color = p.text)
+                        Spacer(Modifier.height(3.dp))
                         Text(
-                            "模糊强度",
-                            fontSize = SaltDesign.fontSizeMain,
-                            color = p.text,
-                            modifier = Modifier.weight(1f)
+                            StatsStore.storageSummary(),
+                            fontSize = SaltDesign.fontSizeSub,
+                            color = p.subText
                         )
-                        val currentBlur = BackdropCapture.blurDpState.value
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            BlurChoice(BackdropCapture.BLUR_LOW, currentBlur)
-                            BlurChoice(24, currentBlur)
-                            BlurChoice(48, currentBlur)
-                            BlurChoice(72, currentBlur)
-                        }
                     }
+                    RowDivider()
+                    AdjustableRow(
+                        label = "明细保留",
+                        value = StorageRule.describe(),
+                        onClick = onEditRetention
+                    )
+                    RowDivider()
+                    Column(Modifier.padding(vertical = 6.dp)) {
+                        Text("数据目录", fontSize = SaltDesign.fontSizeMain, color = p.text)
+                        Spacer(Modifier.height(4.dp))
+                        Text(dir, fontSize = SaltDesign.fontSizeSub, color = p.subText)
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                // ------------------------------------------------ 诊断（运行状态）
+                SaltGroup {
+                    GroupHeader("诊断")
+                    ItemRow(
+                        "背景",
+                        if (bridgeOn) {
+                            if (HostAppearance.isMaterialStyle()) "跟随窗口材质（透明）" else "经典纯色"
+                        } else {
+                            "降级：桥接层未生效，使用纯色背景"
+                        }
+                    )
+                    RowDivider()
+                    ItemRow(
+                        "材质桥接",
+                        if (bridgeOn) {
+                            "已生效 · 隐藏=" + com.spwmods.waerwak.listenstats.ui.HostMaterialState.hidden
+                        } else {
+                            "未生效（replaceComposable 未进入组合）"
+                        }
+                    )
+                    RowDivider()
+                    ItemRow("封面缓存", com.spwmods.waerwak.listenstats.ui.CoverCache.statsText())
+                    RowDivider()
+                    ItemRow("标题栏按钮", com.spwmods.waerwak.listenstats.ui.TitlebarButton.statusText())
                 }
             }
         }
         Spacer(Modifier.height(12.dp))
+        // ------------------------------------------------ 权限（全宽）
         SaltGroup {
             GroupHeader("权限")
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -4301,11 +4345,36 @@ private fun InfoTab(tick: Int, onEditThreshold: () -> Unit, onEditRetention: () 
                 color = p.subText,
                 modifier = Modifier.padding(vertical = 6.dp)
             )
-            RowDivider()
-            Column(Modifier.padding(vertical = 6.dp)) {
-                Text("数据目录", fontSize = SaltDesign.fontSizeMain, color = p.text)
-                Spacer(Modifier.height(4.dp))
-                Text(dir, fontSize = SaltDesign.fontSizeSub, color = p.subText)
+        }
+    }
+}
+
+/** 「标签 + 当前值 + 调整按钮」一行（计数门槛 / 明细保留 / 字体大小共用） */
+@Composable
+private fun AdjustableRow(label: String, value: String, onClick: () -> Unit) {
+    val p = LocalSaltPalette.current
+    Row(
+        Modifier.fillMaxWidth().height(30.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            label,
+            fontSize = SaltDesign.fontSizeMain,
+            color = p.text,
+            modifier = Modifier.weight(1f)
+        )
+        Text(value, fontSize = SaltDesign.fontSizeSub, color = p.subText)
+        Spacer(Modifier.width(8.dp))
+        Surface(
+            onClick = onClick,
+            shape = SaltDesign.shapeSmall,
+            color = p.highlight.copy(alpha = 0.16f)
+        ) {
+            Box(
+                Modifier.height(24.dp).padding(horizontal = 10.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("调整", fontSize = SaltDesign.fontSizeSub, color = p.highlight)
             }
         }
     }
@@ -4399,8 +4468,6 @@ private fun PermIcon(kind: Int, color: Color) {
     )
 }
 
-private fun yesNo(value: Boolean): String = if (value) "已授权" else "未授权"
-
 /** SaltUI Item：左侧标题 + 右侧值 */
 @Composable
 private fun ItemRow(title: String, value: String) {
@@ -4416,19 +4483,6 @@ private fun ItemRow(title: String, value: String) {
         )
         Text(value, fontSize = SaltDesign.fontSizeSub, color = LocalSaltPalette.current.subText)
     }
-}
-
-private fun barOf(count: Int, max: Int): String {
-    if (count <= 0 || max <= 0) return ""
-    var n = count * 24 / max
-    if (n < 1) n = 1
-    val sb = StringBuilder(n)
-    var i = 0
-    while (i < n) {
-        sb.append('█')
-        i++
-    }
-    return sb.toString()
 }
 
 // ---------------------------------------------------------------- 通用小组件
@@ -4473,7 +4527,7 @@ private fun TrackCover(coverId: String, diameter: androidx.compose.ui.unit.Dp) {
     val p = LocalSaltPalette.current
     val bitmap = rememberCover(coverId)
     Surface(
-        shape = SaltDesign.shapeSmall,
+        shape = SaltDesign.shapeCover,
         color = p.subBackground,
         modifier = Modifier.size(diameter)
     ) {
@@ -4603,7 +4657,7 @@ private fun Pager(
                     expanded = sizeOpen,
                     onDismissRequest = { sizeOpen = false },
                     modifier = Modifier.width(120.dp),
-                    containerColor = LocalSaltPalette.current.background
+                    containerColor = LocalSaltPalette.current.dialogSurface
                 ) {
                     var oi = 0
                     while (oi < pageSizeOptions.size) {
@@ -4642,35 +4696,6 @@ private fun Pager(
 
 private val pageSizeOptions = intArrayOf(10, 15, 20, 30, 50)
 
-/** 等宽胶囊按钮：选中 = 强调色边框 + 淡强调底 + 强调文字 */
-@Composable
-private fun PillButton(
-    label: String,
-    selected: Boolean,
-    height: androidx.compose.ui.unit.Dp,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    val p = LocalSaltPalette.current
-    Surface(
-        onClick = onClick,
-        shape = SaltDesign.shapeMedium,
-        color = if (selected) p.highlight.copy(alpha = 0.14f) else p.subBackground,
-        border = BorderStroke(
-            1.dp,
-            SolidColor(if (selected) p.highlight else p.subText.copy(alpha = 0.20f))
-        ),
-        modifier = modifier
-    ) {
-        Box(Modifier.height(height), contentAlignment = Alignment.Center) {
-            Text(
-                label,
-                fontSize = SaltDesign.fontSizeMain,
-                color = if (selected) p.highlight else p.subText
-            )
-        }
-    }
-}
 
 /** 下划线式 Tab（第一层：歌曲/专辑/艺术家） */
 @Composable
@@ -4687,7 +4712,7 @@ private fun UnderlineTab(
             Box(Modifier.fillMaxWidth().height(height), contentAlignment = Alignment.Center) {
                 Text(
                     label,
-                    fontSize = SaltDesign.fontSizeParagraph,
+                    fontSize = SaltDesign.fontSizeMain,
                     color = if (selected) p.highlight else p.subText
                 )
             }
@@ -4728,35 +4753,23 @@ private fun SortChip(
 private fun SegmentButton(label: String, selected: Boolean, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
-        shape = SaltDesign.shapeSmall,
+        shape = SaltDesign.shapeInner,
         color = if (selected) LocalSaltPalette.current.highlight else LocalSaltPalette.current.subBackground
     ) {
         Box(
-            Modifier.height(26.dp).padding(horizontal = 12.dp),
+            Modifier.height(SaltDesign.segmentHeight).padding(horizontal = 12.dp),
             contentAlignment = Alignment.Center
         ) {
             Text(
                 label,
                 fontSize = SaltDesign.fontSizeSub,
-                color = if (selected) LocalSaltPalette.current.onHighlight else LocalSaltPalette.current.subText
+                color = if (selected) LocalSaltPalette.current.onHighlight else LocalSaltPalette.current.text
             )
         }
     }
 }
 
-/** 信息页的模糊强度档位按钮（改档后立即重新烘焙） */
-@Composable
-private fun BlurChoice(dp: Int, current: Int) {
-    SegmentButton(
-        label = if (dp <= BackdropCapture.BLUR_LOW) BackdropCapture.BLUR_LOW.toString() + "dp" else dp.toString() + "dp",
-        selected = dp == current,
-        onClick = {
-            BackdropCapture.setBlurDp(dp)
-            UiStateStore.saveBackdropBlur(dp)
-        }
-    )
-}
-
+/** 信息页的模糊强度档位按钮（已移除：背景不再走截图方案） */
 @Composable
 private fun SmallButton(label: String, enabled: Boolean, onClick: () -> Unit) {
     Surface(
@@ -4777,11 +4790,6 @@ private fun SmallButton(label: String, enabled: Boolean, onClick: () -> Unit) {
     }
 }
 
-@Composable
-private fun SectionTitle(title: String) {
-    Text(title, fontSize = SaltDesign.fontSizeSub, color = LocalSaltPalette.current.subText)
-    Spacer(Modifier.height(8.dp))
-}
 
 @Composable
 private fun EmptyHint(text: String) {
@@ -4789,29 +4797,6 @@ private fun EmptyHint(text: String) {
     Spacer(Modifier.height(4.dp))
 }
 
-@Composable
-private fun TrackLine(rank: Int?, track: TrackAgg, secondary: String) {
-    Row(
-        Modifier.fillMaxWidth().height(30.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (rank != null) {
-            Box(Modifier.width(22.dp), contentAlignment = Alignment.CenterStart) {
-                Text(rank.toString(), fontSize = SaltDesign.fontSizeSub, color = LocalSaltPalette.current.subText)
-            }
-        }
-        val title = StringBuilder(48)
-        title.append(track.title.ifBlank { "未知曲目" })
-        if (track.artist.isNotBlank()) title.append(" · ").append(track.artist)
-        Text(
-            clip(title.toString(), 42),
-            fontSize = SaltDesign.fontSizeSub,
-            color = LocalSaltPalette.current.text,
-            modifier = Modifier.weight(1f)
-        )
-        Text(secondary, fontSize = SaltDesign.fontSizeSub, color = LocalSaltPalette.current.subText)
-    }
-}
 
 @Composable
 private fun FooterBar() {
@@ -4820,11 +4805,6 @@ private fun FooterBar() {
         fontSize = 10.sp,
         color = LocalSaltPalette.current.subText
     )
-}
-
-private fun clip(raw: String, max: Int): String {
-    if (raw.length <= max) return raw
-    return raw.substring(0, max) + "…"
 }
 
 private fun weekdayText(date: String): String = try {
