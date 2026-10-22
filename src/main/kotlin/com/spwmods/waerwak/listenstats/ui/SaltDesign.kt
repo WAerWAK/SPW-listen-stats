@@ -121,18 +121,42 @@ private val LightClassic = SaltPalette(
     dialogSurface = Color(0xFFFFFFFF)
 )
 
-/** 深色材质：卡片/控件 34% 中性灰覆盖（让 DWM 背景透出） */
-private val DarkMaterial = DarkClassic.copy(
+/*
+ * 材质模式下，卡片/控件的半透明覆盖层要压在 DWM 材质上。
+ * alpha 是按宿主截图反推的（宿主分组卡片相对面板背景的亮度增量）：
+ *   - 云母：背景 #1E2237 → 卡片 #2A2F3B，增量约 +12，对应 alpha ≈ 14%
+ *   - 亚克力：背景 #3C3F46 → 卡片 #4B4E54，增量约 +16，对应 alpha ≈ 25%
+ * 两种材质透出的壁纸亮度不同，所以必须分开设值。
+ */
+
+/** 深色云母：14% 中性灰覆盖 */
+private val DarkMica = DarkClassic.copy(
     background = Color.Transparent,
-    card = Color(0xFF7C7C7C).copy(alpha = 0.34f),
-    subBackground = Color(0xFF7C7C7C).copy(alpha = 0.34f),
+    card = Color(0xFF7C7C7C).copy(alpha = 0.14f),
+    subBackground = Color(0xFF7C7C7C).copy(alpha = 0.14f),
     subText = Color(0xFFCCD0D5).copy(alpha = 0.91f),
     // 弹窗在用材质背景时保持不透明（否则文字读不清）
     dialogSurface = Color(0xFF3A3A3A)
 )
 
-/** 浅色材质：卡片/控件 72% 不透明底 */
-private val LightMaterial = LightClassic.copy(
+/** 深色亚克力：25% 中性灰覆盖 */
+private val DarkAcrylic = DarkClassic.copy(
+    background = Color.Transparent,
+    card = Color(0xFF7C7C7C).copy(alpha = 0.25f),
+    subBackground = Color(0xFF7C7C7C).copy(alpha = 0.25f),
+    subText = Color(0xFFCCD0D5).copy(alpha = 0.91f),
+    dialogSurface = Color(0xFF3A3A3A)
+)
+
+/** 浅色材质：卡片/控件 72% 不透明底（浅色下没有可反推的截图，先沿用） */
+private val LightMica = LightClassic.copy(
+    background = Color.Transparent,
+    card = LightClassic.card.copy(alpha = 0.72f),
+    subBackground = LightClassic.subBackground.copy(alpha = 0.72f),
+    dialogSurface = Color(0xFFF7F7F7)
+)
+
+private val LightAcrylic = LightClassic.copy(
     background = Color.Transparent,
     card = LightClassic.card.copy(alpha = 0.72f),
     subBackground = LightClassic.subBackground.copy(alpha = 0.72f),
@@ -142,10 +166,12 @@ private val LightMaterial = LightClassic.copy(
 val SaltDarkPalette: SaltPalette = DarkClassic
 val SaltLightPalette: SaltPalette = LightClassic
 
-/** 按 深浅 × 是否材质 取配色 */
-fun saltPalette(dark: Boolean, material: Boolean): SaltPalette {
-    if (dark) return if (material) DarkMaterial else DarkClassic
-    return if (material) LightMaterial else LightClassic
+/** 按 深浅 × 是否材质 × 窗口样式（亚克力 / 云母）取配色 */
+fun saltPalette(dark: Boolean, material: Boolean, windowStyle: String = "WindowsMica"): SaltPalette {
+    if (!material) return if (dark) DarkClassic else LightClassic
+    val acrylic = windowStyle == "WindowsAcrylic"
+    if (dark) return if (acrylic) DarkAcrylic else DarkMica
+    return if (acrylic) LightAcrylic else LightMica
 }
 
 val LocalSaltPalette = staticCompositionLocalOf { SaltDarkPalette }

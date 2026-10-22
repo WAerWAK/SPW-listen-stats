@@ -2,10 +2,10 @@
 
 package com.spwmods.waerwak.listenstats
 
+import com.xuncorp.spw.workshop.api.UnstableSpwWorkshopApi
 import com.xuncorp.spw.workshop.api.PlaybackExtensionPoint.MediaItem
 import com.xuncorp.spw.workshop.api.PluginContext
 import com.xuncorp.spw.workshop.api.PluginPermission
-import com.xuncorp.spw.workshop.api.UnstableSpwWorkshopApi
 import com.xuncorp.spw.workshop.api.WorkshopApi
 import com.spwmods.waerwak.listenstats.stats.StatsStore
 import java.io.File
