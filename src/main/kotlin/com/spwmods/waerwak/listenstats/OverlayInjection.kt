@@ -2,7 +2,14 @@
 
 package com.spwmods.waerwak.listenstats
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
@@ -707,9 +714,17 @@ private fun OverlayHost() {
                     }
                 }
             ) {
-                if (opened) {
+                // 打开：从下方 150px 滑入 + 淡入；关闭：淡出（与宿主页面切换同一套参数）
+                AnimatedVisibility(
+                    visible = opened,
+                    enter = slideInVertically(animationSpec = spring(stiffness = 500f)) { 150 } +
+                        fadeIn(animationSpec = spring(stiffness = 500f)),
+                    // 关闭不做动画：立即消失（淡出会短暂盖住宿主内容）
+                    exit = androidx.compose.animation.ExitTransition.None
+                ) {
                     StatsOverlay(onClose = closePanel)
-                } else {
+                }
+                if (!opened) {
                     // ❗ 关键：未打开时不能有任何不透明背景，否则会盖住宿主页面
                     Box(Modifier.fillMaxSize()) {
                         if (OverlayInjection.entryEnabled.value) {
@@ -1060,17 +1075,29 @@ private fun StatsOverlay(onClose: () -> Unit) {
                 TabBar(selected = tab, onSelect = { tab = it })
                 Spacer(Modifier.height(14.dp))
                 Box(Modifier.fillMaxWidth().weight(1f)) {
-                    ScrollArea(resetKey = tab, barRightExtra = sideGap) {
-                        when (tab) {
-                            0 -> OverviewTab(liveKey)
-                            1 -> RankingTab(liveKey)
-                            2 -> CalendarTab(tick, onSelectDay = { dayDetailDate = it })
-                            else -> InfoTab(
-                                liveKey,
-                                onEditThreshold = { showThresholdEditor = true },
-                                onEditRetention = { showRetentionEditor = true },
-                                onEditFontSize = { showFontSizeEditor = true }
-                            )
+                    // 四页切换：旧页快速淡出，新页从下方 150px 滑入（对齐宿主 AppNavigation 的动效）
+                    AnimatedContent(
+                        targetState = tab,
+                        modifier = Modifier.fillMaxSize(),
+                        transitionSpec = {
+                            (slideInVertically(animationSpec = spring(stiffness = 500f)) { 150 } +
+                                fadeIn(animationSpec = spring(stiffness = 500f))) togetherWith
+                                fadeOut(animationSpec = spring(stiffness = 500f))
+                        },
+                        label = "tab-switch"
+                    ) { currentTab ->
+                        ScrollArea(resetKey = currentTab, barRightExtra = sideGap) {
+                            when (currentTab) {
+                                0 -> OverviewTab(liveKey)
+                                1 -> RankingTab(liveKey)
+                                2 -> CalendarTab(tick, onSelectDay = { dayDetailDate = it })
+                                else -> InfoTab(
+                                    liveKey,
+                                    onEditThreshold = { showThresholdEditor = true },
+                                    onEditRetention = { showRetentionEditor = true },
+                                    onEditFontSize = { showFontSizeEditor = true }
+                                )
+                            }
                         }
                     }
                 }
@@ -1342,18 +1369,10 @@ private fun OverviewTab(tick: Int) {
                     modifier = Modifier.weight(1f),
                     onClick = { durationMode = (durationMode + 1) % 3 }
                 )
-                KpiCell("总播放次数", snapshot.totalCount.toString(), Modifier.weight(1f))
-                KpiCell("曲目数", snapshot.trackCount.toString(), Modifier.weight(1f))
-                KpiCellParts(
-                    label = "连续收听",
-                    parts = listOf(streak.toString() to "天"),
-                    modifier = Modifier.weight(1f)
-                )
-                KpiCellParts(
-                    label = "最长连续",
-                    parts = listOf(longest.toString() to "天"),
-                    modifier = Modifier.weight(1f)
-                )
+                KpiNumberCell("总播放次数", snapshot.totalCount, "", Modifier.weight(1f))
+                KpiNumberCell("曲目数", snapshot.trackCount, "", Modifier.weight(1f))
+                KpiNumberCell("连续收听", streak, "天", Modifier.weight(1f))
+                KpiNumberCell("最长连续", longest, "天", Modifier.weight(1f))
             }
         }
         Spacer(Modifier.height(12.dp))
@@ -1652,6 +1671,91 @@ private fun KpiCell(label: String, value: String, modifier: Modifier) {
     }
 }
 
+/**
+ * 数字变化时的「上滑切换」：旧值向上淡出，新值从下方淡入
+ *
+ * 纯整数插值（49→50）几乎没有中间帧，看上去只会"突然变"，
+ * 所以改成位移 + 透明度过渡，变化过程肉眼可见。
+ */
+@Composable
+private fun AnimatedNumberText(
+    text: String,
+    fontSize: androidx.compose.ui.unit.TextUnit,
+    fontWeight: androidx.compose.ui.text.font.FontWeight?,
+    color: Color
+) {
+    var current by remember { mutableStateOf(text) }
+    var previous by remember { mutableStateOf(text) }
+    val progress = remember { androidx.compose.animation.core.Animatable(1f) }
+    LaunchedEffect(text) {
+        if (text != current) {
+            previous = current
+            current = text
+            progress.snapTo(0f)
+            progress.animateTo(
+                targetValue = 1f,
+                animationSpec = androidx.compose.animation.core.tween(
+                    durationMillis = 340,
+                    easing = androidx.compose.animation.core.FastOutSlowInEasing
+                )
+            )
+        }
+    }
+    val offsetPx = with(androidx.compose.ui.platform.LocalDensity.current) { 12.dp.toPx() }
+    val p = progress.value
+    Box {
+        if (p < 1f) {
+            Text(
+                previous,
+                fontSize = fontSize,
+                fontWeight = fontWeight,
+                color = color,
+                modifier = Modifier.graphicsLayer {
+                    alpha = 1f - p
+                    translationY = -offsetPx * p
+                }
+            )
+        }
+        Text(
+            current,
+            fontSize = fontSize,
+            fontWeight = fontWeight,
+            color = color,
+            modifier = Modifier.graphicsLayer {
+                alpha = p
+                translationY = offsetPx * (1f - p)
+            }
+        )
+    }
+}
+
+/** 整数 KPI（数值变化时上滑切换） */
+@Composable
+private fun KpiNumberCell(label: String, value: Int, suffix: String, modifier: Modifier) {
+    val p = LocalSaltPalette.current
+    Column(modifier) {
+        Text(label, fontSize = SaltDesign.fontSizeSub, color = p.labelAccent)
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.Bottom) {
+            AnimatedNumberText(
+                text = value.toString(),
+                fontSize = SaltDesign.fontSizeKpi,
+                fontWeight = SaltDesign.weightKpi,
+                color = p.highlight
+            )
+            if (suffix.isNotEmpty()) {
+                Spacer(Modifier.width(2.dp))
+                Text(
+                    suffix,
+                    fontSize = SaltDesign.fontSizeKpiUnit,
+                    color = p.highlight,
+                    modifier = Modifier.padding(bottom = 3.dp)
+                )
+            }
+        }
+    }
+}
+
 /** SaltUI 风格的圆角分组容器（RoundedColumn 的简化版） */
 @Composable
 private fun SaltGroup(
@@ -1691,7 +1795,13 @@ private fun RankingTab(tick: Int) {
     // 每页条数（10/15/20/30/50，默认 10）
     var pageSize by remember { mutableStateOf(10) }
     val searchState = remember { TextFieldState("") }
-    val query = searchState.text.toString()
+    val rawQuery = searchState.text.toString()
+    // 输入防抖：每敲一个字都全量重排太浪费，停手 150ms 再查
+    var query by remember { mutableStateOf("") }
+    LaunchedEffect(rawQuery) {
+        kotlinx.coroutines.delay(150L)
+        query = rawQuery
+    }
     val today = LocalDate.now()
     val sinceDate: String? = when (range) {
         1 -> today.minusDays(30).toString()
@@ -2497,13 +2607,16 @@ private fun DurationChart(
     val axisMax = niceAxisMax(rawMax)
     val average = if (buckets.size > 0) (total / buckets.size).toFloat() else 0f
 
-    var started by remember(from, to, byTime) { mutableStateOf(false) }
-    LaunchedEffect(from, to, byTime) { started = true }
-    val progress by animateFloatAsState(
-        targetValue = if (started) 1f else 0f,
-        animationSpec = tween(durationMillis = 380),
-        label = "bucket-appear"
-    )
+    // 任何改变图表内容的操作（范围 / 次数-时长 / 柱线曲线）都重放一次「从下往上升起」：
+    // 先 snapTo(0) 让旧图形立即消失，再生长到 1
+    val progress = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(from, to, byTime, chartType) {
+        progress.snapTo(0f)
+        progress.animateTo(
+            targetValue = 1f,
+            animationSpec = androidx.compose.animation.core.tween(durationMillis = 380)
+        )
+    }
 
     var hovered by remember(from, to) { mutableStateOf(-1) }
     var hoverLeftPx by remember { mutableStateOf(0f) }
@@ -2728,7 +2841,7 @@ private fun DurationChart(
                                         }
                                         .drawBehind {
                                             val ratio = if (axisMax > 0f) value / axisMax else 0f
-                                            val h = size.height * ratio * progress
+                                            val h = size.height * ratio * progress.value
                                             if (h <= 0f) return@drawBehind
                                             val barW = size.width * 0.66f
                                             val left = (size.width - barW) / 2f
@@ -2755,7 +2868,7 @@ private fun DurationChart(
                                 var b2 = 0
                                 while (b2 < n) {
                                     val ratio = if (axisMax > 0f) values[b2] / axisMax else 0f
-                                    val y = size.height - size.height * ratio * progress
+                                    val y = size.height - size.height * ratio * progress.value
                                     pts.add(Offset(if (n > 1) b2 * stepX else size.width / 2f, y))
                                     b2++
                                 }
@@ -3382,6 +3495,7 @@ private fun ScrollArea(
                             size = Size(barW, barH),
                             cornerRadius = CornerRadius(barW / 2f)
                         )
+
                     }
                 }
             )
@@ -4183,6 +4297,35 @@ private fun InfoTab(
                     ItemRow("封面缓存", com.spwmods.waerwak.listenstats.ui.CoverCache.statsText())
                     RowDivider()
                     ItemRow("标题栏按钮", com.spwmods.waerwak.listenstats.ui.TitlebarButton.statusText())
+                    RowDivider()
+                    Row(
+                        Modifier.fillMaxWidth().height(34.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "诊断信息",
+                            fontSize = SaltDesign.fontSizeMain,
+                            color = p.text,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Surface(
+                            onClick = {
+                                val ok = copyToClipboard(
+                                    buildDiagnostics(snap, dir, trackCount, eventLines, bridgeOn)
+                                )
+                                toast(if (ok) "诊断信息已复制到剪贴板" else "复制失败", ok)
+                            },
+                            shape = SaltDesign.shapeSmall,
+                            color = p.highlight.copy(alpha = 0.16f)
+                        ) {
+                            Box(
+                                Modifier.height(24.dp).padding(horizontal = 10.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("复制", fontSize = SaltDesign.fontSizeSub, color = p.highlight)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -4776,4 +4919,61 @@ private fun formatMs(ms: Long): String {
     if (hours > 0L && minutes > 0L) return hours.toString() + " 小时 " + minutes + " 分"
     if (hours > 0L) return hours.toString() + " 小时"
     return minutes.toString() + " 分钟"
+}
+
+/** 写系统剪贴板（复制诊断信息用） */
+private fun copyToClipboard(text: String): Boolean = try {
+    val cb = java.awt.Toolkit.getDefaultToolkit().systemClipboard
+    cb.setContents(java.awt.datatransfer.StringSelection(text), null)
+    true
+} catch (t: Throwable) {
+    false
+}
+
+/** 面板内轻提示（不打断操作） */
+private fun toast(text: String, ok: Boolean) {
+    try {
+        com.xuncorp.spw.workshop.api.WorkshopApi.ui.toast(
+            text,
+            if (ok) com.xuncorp.spw.workshop.api.WorkshopApi.Ui.ToastType.Success
+            else com.xuncorp.spw.workshop.api.WorkshopApi.Ui.ToastType.Warning
+        )
+    } catch (t: Throwable) {
+        System.err.println("[listen-stats] " + text)
+    }
+}
+
+/** 拼一段可直接贴给开发者排查的诊断文本 */
+private fun buildDiagnostics(
+    snap: ProbeSnapshot,
+    dir: String,
+    trackCount: Int,
+    eventLines: Int,
+    bridgeOn: Boolean
+): String {
+    val sb = StringBuilder(768)
+    sb.append("== 听歌统计诊断 ==").append('\n')
+    sb.append("插件 ").append(snap.pluginVersion).append(" / SPW ").append(snap.spwVersion)
+        .append(" (").append(snap.channel).append(')').append('\n')
+    sb.append("Kotlin ").append(snap.kotlinVersion).append(" / Compose ").append(snap.composeVersion).append('\n')
+    sb.append("数据目录: ").append(dir).append('\n')
+    sb.append("曲目 ").append(trackCount).append(" / 聚合行 ").append(eventLines).append('\n')
+    sb.append("存储: ").append(StatsStore.storageSummary()).append('\n')
+    sb.append("计数门槛: ").append(CountRule.describe()).append('\n')
+    sb.append("明细保留: ").append(StorageRule.describe()).append('\n')
+    sb.append("背景: ")
+    if (bridgeOn) {
+        sb.append(if (HostAppearance.isMaterialStyle()) "跟随窗口材质（透明）" else "经典纯色")
+    } else {
+        sb.append("降级（桥接层未生效）")
+    }
+    sb.append('\n')
+    sb.append("材质桥接: ").append(if (bridgeOn) "已生效" else "未生效")
+        .append(" / 隐藏=").append(com.spwmods.waerwak.listenstats.ui.HostMaterialState.hidden).append('\n')
+    sb.append("封面: ").append(com.spwmods.waerwak.listenstats.ui.CoverCache.statsText()).append('\n')
+    sb.append("标题栏按钮: ").append(com.spwmods.waerwak.listenstats.ui.TitlebarButton.statusText()).append('\n')
+    sb.append("播放: ").append(if (snap.isPlaying) "播放中" else "未播放")
+        .append(" / 位置回调 ").append(snap.positionCallbacks).append(" 次").append('\n')
+    sb.append("当前曲目: ").append(snap.lastTrackText).append('\n')
+    return sb.toString()
 }
