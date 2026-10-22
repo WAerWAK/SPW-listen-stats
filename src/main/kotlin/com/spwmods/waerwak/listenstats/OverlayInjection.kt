@@ -567,6 +567,34 @@ object StatsActions {
 private const val PAGE_SIZE = 12
 private val TABS = arrayOf("概览", "排行", "活跃度", "信息")
 
+/**
+ * 弹窗外点击关闭（外层）
+ *
+ * 注意：`Modifier.onPointerEvent` **不会**因为事件已被子节点消费就跳过回调，
+ * 必须在回调里自己检查 `isConsumed`。否则弹窗内点按钮（翻页 / 步进 / 保存）
+ * 会被当成「点在弹窗外面」，把弹窗直接关掉。
+ */
+private fun Modifier.dismissOnOutsidePress(onDismiss: () -> Unit): Modifier =
+    onPointerEvent(PointerEventType.Press) { event ->
+        var consumed = false
+        var i = 0
+        while (i < event.changes.size) {
+            if (event.changes[i].isConsumed) consumed = true
+            i++
+        }
+        if (!consumed) onDismiss()
+    }
+
+/** 弹窗本体：把按下标记为已消费，让外层知道这次点在弹窗里 */
+private fun Modifier.consumePress(): Modifier =
+    onPointerEvent(PointerEventType.Press) { event ->
+        var i = 0
+        while (i < event.changes.size) {
+            event.changes[i].consume()
+            i++
+        }
+    }
+
 @Composable
 private fun OverlayHost() {
     var hovered by remember { mutableStateOf(false) }
@@ -2259,19 +2287,33 @@ private fun ActivityHeatmap(
                                     while (d < 7) {
                                         val date = gridStart.plusDays(w * 7L + d)
                                         val inRange = yearMode < 0 || date.year == yearMode
-                                        if (inRange && !date.isAfter(today)) {
-                                            val key = date.toString()
-                                            val agg = daily[key]
-                                            val ms = if (agg == null) 0L else agg.listenedMs
-                                            val level = HeatmapScale.level(ms, highMs)
+                                        if (inRange) {
                                             val x = w * (cellPx + gapPx)
                                             val y = d * (cellPx + gapPx)
-                                            drawRoundRect(
-                                                color = heatColor(level, p.isDark),
-                                                topLeft = Offset(x, y),
-                                                size = Size(cellPx, cellPx),
-                                                cornerRadius = radius
-                                            )
+                                            if (date.isAfter(today)) {
+                                                // 年份视图：画一层更淡的底表示「还没到」；
+                                                // 近一年视图不画未来格，让网格以今天结束
+                                                // （两种模式下未来日期都不参与色阶，也不响应悬浮/点击）
+                                                if (yearMode >= 0) {
+                                                    drawRoundRect(
+                                                        color = futureHeatColor(p.isDark),
+                                                        topLeft = Offset(x, y),
+                                                        size = Size(cellPx, cellPx),
+                                                        cornerRadius = radius
+                                                    )
+                                                }
+                                            } else {
+                                                val key = date.toString()
+                                                val agg = daily[key]
+                                                val ms = if (agg == null) 0L else agg.listenedMs
+                                                val level = HeatmapScale.level(ms, highMs)
+                                                drawRoundRect(
+                                                    color = heatColor(level, p.isDark),
+                                                    topLeft = Offset(x, y),
+                                                    size = Size(cellPx, cellPx),
+                                                    cornerRadius = radius
+                                                )
+                                            }
                                         }
                                         d++
                                     }
@@ -3039,15 +3081,14 @@ private fun CalendarPicker(
     val canForward = month.isBefore(maxMonthStart)
 
     Box(
-        Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { onDismiss() },
+        Modifier.fillMaxSize().dismissOnOutsidePress(onDismiss),
         contentAlignment = Alignment.Center
     ) {
         Surface(
             shape = SaltDesign.shapeLarge,
             color = p.dialogSurface,
             shadowElevation = 18.dp,
-            modifier = Modifier.onPointerEvent(PointerEventType.Press) { e -> e.changes.forEach { ch -> ch.consume() } }
+            modifier = Modifier.consumePress()
         ) {
             Column(Modifier.width(360.dp).padding(16.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -3149,6 +3190,10 @@ private fun weekdayShort(index: Int): String = when (index) {
     5 -> "六"
     else -> "日"
 }
+
+/** 未来日期的格子：比「无收听」再淡一半，只保留网格存在感 */
+private fun futureHeatColor(dark: Boolean): Color =
+    if (dark) Color(0x0AFFFFFF) else Color(0x0A000000)
 
 /** 热力图配色：按「当天收听时长」档位（0=无，1–4 递增）而非次数 */
 private fun heatColor(level: Int, dark: Boolean): Color {
@@ -3273,14 +3318,14 @@ private fun ThresholdEditor(onDismiss: () -> Unit) {
     val p = LocalSaltPalette.current
 
     Box(
-        Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { onDismiss() },
+        Modifier.fillMaxSize().dismissOnOutsidePress(onDismiss),
         contentAlignment = Alignment.Center
     ) {
         Surface(
             shape = SaltDesign.shapeLarge,
             color = p.dialogSurface,
-            shadowElevation = 18.dp
+            shadowElevation = 18.dp,
+            modifier = Modifier.consumePress()
         ) {
             Column(Modifier.width(460.dp).padding(20.dp)) {
                 GroupHeader("计数门槛")
@@ -3378,15 +3423,14 @@ private fun GroupDetailDialog(payload: String, onDismiss: () -> Unit) {
     }
 
     Box(
-        Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { onDismiss() },
+        Modifier.fillMaxSize().dismissOnOutsidePress(onDismiss),
         contentAlignment = Alignment.Center
     ) {
         Surface(
             shape = SaltDesign.shapeLarge,
             color = p.dialogSurface,
             shadowElevation = 18.dp,
-            modifier = Modifier.onPointerEvent(PointerEventType.Press) { e -> e.changes.forEach { ch -> ch.consume() } }
+            modifier = Modifier.consumePress()
         ) {
             Column(Modifier.width(620.dp).padding(20.dp)) {
                 GroupHeader(if (byAlbum) "专辑" else "艺术家")
@@ -3486,15 +3530,14 @@ private fun TrackDetailDialog(trackKey: String, onDismiss: () -> Unit) {
     }
 
     Box(
-        Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { onDismiss() },
+        Modifier.fillMaxSize().dismissOnOutsidePress(onDismiss),
         contentAlignment = Alignment.Center
     ) {
         Surface(
             shape = SaltDesign.shapeLarge,
             color = p.dialogSurface,
             shadowElevation = 18.dp,
-            modifier = Modifier.onPointerEvent(PointerEventType.Press) { e -> e.changes.forEach { ch -> ch.consume() } }
+            modifier = Modifier.consumePress()
         ) {
             Column(Modifier.width(580.dp).padding(20.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -3615,15 +3658,14 @@ private fun DayDetailDialog(date: String, onDismiss: () -> Unit) {
     }
 
     Box(
-        Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { onDismiss() },
+        Modifier.fillMaxSize().dismissOnOutsidePress(onDismiss),
         contentAlignment = Alignment.Center
     ) {
         Surface(
             shape = SaltDesign.shapeLarge,
             color = p.dialogSurface,
             shadowElevation = 18.dp,
-            modifier = Modifier.onPointerEvent(PointerEventType.Press) { e -> e.changes.forEach { ch -> ch.consume() } }
+            modifier = Modifier.consumePress()
         ) {
             Column(Modifier.width(560.dp).padding(20.dp)) {
                 GroupHeader(date + "（" + weekdayText(date) + "）")
@@ -3713,15 +3755,14 @@ private fun FontSizeEditor(onDismiss: () -> Unit) {
     var extra by remember { mutableStateOf(OverlayInjection.fontExtraPercent.value) }
     val p = LocalSaltPalette.current
     Box(
-        Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { onDismiss() },
+        Modifier.fillMaxSize().dismissOnOutsidePress(onDismiss),
         contentAlignment = Alignment.Center
     ) {
         Surface(
             shape = SaltDesign.shapeLarge,
             color = p.dialogSurface,
             shadowElevation = 18.dp,
-            modifier = Modifier.onPointerEvent(PointerEventType.Press) { e -> e.changes.forEach { ch -> ch.consume() } }
+            modifier = Modifier.consumePress()
         ) {
             Column(Modifier.width(480.dp).padding(20.dp)) {
                 GroupHeader("字体大小")
@@ -3769,15 +3810,14 @@ private fun RetentionEditor(onDismiss: () -> Unit) {
     var days by remember { mutableStateOf(StorageRule.rawEventKeepDays) }
     val p = LocalSaltPalette.current
     Box(
-        Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { onDismiss() },
+        Modifier.fillMaxSize().dismissOnOutsidePress(onDismiss),
         contentAlignment = Alignment.Center
     ) {
         Surface(
             shape = SaltDesign.shapeLarge,
             color = p.dialogSurface,
             shadowElevation = 18.dp,
-            modifier = Modifier.onPointerEvent(PointerEventType.Press) { e -> e.changes.forEach { ch -> ch.consume() } }
+            modifier = Modifier.consumePress()
         ) {
             Column(Modifier.width(480.dp).padding(20.dp)) {
                 GroupHeader("明细保留天数")
