@@ -61,7 +61,12 @@ private fun advance(ms: Long) {
 
 private var tempRoot: File? = null
 
-private fun freshEnv(minSec: Int = 30, percent: Int = 50, mode: String = "max"): File {
+private fun freshEnv(
+    minSec: Int = 30,
+    percent: Int = 50,
+    mode: String = "max",
+    ignoreSec: Int = 0
+): File {
     val dir = File(
         System.getProperty("java.io.tmpdir"),
         "spw-listenstats-test-" + System.nanoTime()
@@ -73,7 +78,7 @@ private fun freshEnv(minSec: Int = 30, percent: Int = 50, mode: String = "max"):
     resetClock()
     SessionTracker.nanoClock = { fakeNano }
     SessionTracker.wallClock = { fakeWall }
-    CountRule.setForTesting(minSec, percent, mode)
+    CountRule.setForTesting(minSec, percent, mode, ignoreSec)
     LiveSessionStore.clear()
     return dir
 }
@@ -434,6 +439,31 @@ fun main() {
         val files = expired.listFiles()
         check(files != null && files.size >= 2, "超期文件应以新名字另存，实际 " + (files?.size ?: 0) + " 个")
         check(!File(events, "2020-01-01.jsonl").exists(), "原明细应被移走")
+    }
+
+    test("极短播放整条丢弃") {
+        freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 5)
+        val item = track("tooshort")
+        SessionTracker.onTrack(item)
+        SessionTracker.onPlayingChanged(true)
+        playFor(item, 0L, 2 * SECOND)
+        SessionTracker.flush()
+        check(StatsStore.allTracks().isEmpty(), "低于忽略阈值的播放不应产生记录")
+        check(StatsStore.replayedLineCount() == 0, "不应写入聚合行")
+    }
+
+    test("超过忽略阈值但未达门槛记为跳过") {
+        freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 5)
+        val item = track("skipped")
+        SessionTracker.onTrack(item)
+        SessionTracker.onPlayingChanged(true)
+        playFor(item, 0L, 8 * SECOND)
+        SessionTracker.flush()
+        val agg = findTrack("skipped")
+        check(agg != null, "应该有记录")
+        check(agg!!.count == 0, "未达门槛不应计数，实际 " + agg.count)
+        check(agg.skipCount == 1, "应记为跳过，实际 " + agg.skipCount)
+        check(agg.listenedMs > 0L, "时长仍应保留")
     }
 
     println()

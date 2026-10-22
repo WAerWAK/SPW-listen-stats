@@ -16,9 +16,12 @@ object CountRule {
     private const val KEY_MIN_SEC = "countMinSeconds"
     private const val KEY_PERCENT = "countPercent"
     private const val KEY_MODE = "countMode" // "max" / "min"
+    private const val KEY_IGNORE_SEC = "ignoreMinSeconds"
 
     const val LIMIT_MIN_SEC = 1
     const val LIMIT_MAX_SEC = 600
+    const val LIMIT_IGNORE_MIN_SEC = 0
+    const val LIMIT_IGNORE_MAX_SEC = 15
 
     /** 配置读取节流：位置回调最高每秒数次，没必要每次都读盘 + 解析 JSON */
     private const val LOAD_THROTTLE_MS = 1_000L
@@ -42,6 +45,16 @@ object CountRule {
     var mode: String = "min"
         private set
 
+    /**
+     * 极短播放的忽略阈值（秒）
+     *
+     * 低于它的这一遍**整条丢弃**：不写事件、不计时长、也不记跳过。
+     * 避免「连着点下一首」堆出一串 1~2 秒的噪音记录。
+     */
+    @Volatile
+    var ignoreMinSeconds: Int = 5
+        private set
+
     private fun helper(): ConfigHelper? = try {
         WorkshopApi.manager.createConfigManager().getConfig("config.json")
     } catch (t: Throwable) {
@@ -61,21 +74,25 @@ object CountRule {
             minSeconds = ((h.get(KEY_MIN_SEC, 30) as? Number)?.toInt() ?: 30).coerceIn(LIMIT_MIN_SEC, LIMIT_MAX_SEC)
             percent = ((h.get(KEY_PERCENT, 50) as? Number)?.toInt() ?: 50).coerceIn(0, 100)
             mode = if (h.get(KEY_MODE, "min") == "min") "min" else "max"
+            ignoreMinSeconds = ((h.get(KEY_IGNORE_SEC, 5) as? Number)?.toInt() ?: 5)
+                .coerceIn(LIMIT_IGNORE_MIN_SEC, LIMIT_IGNORE_MAX_SEC)
         } catch (t: Throwable) {
             // 读失败就用默认值
         }
     }
 
     @Synchronized
-    fun save(newMinSec: Int, newPercent: Int, newMode: String) {
+    fun save(newMinSec: Int, newPercent: Int, newMode: String, newIgnoreSec: Int = 5) {
         minSeconds = newMinSec.coerceIn(LIMIT_MIN_SEC, LIMIT_MAX_SEC)
         percent = newPercent.coerceIn(0, 100)
         mode = if (newMode == "min") "min" else "max"
+        ignoreMinSeconds = newIgnoreSec.coerceIn(LIMIT_IGNORE_MIN_SEC, LIMIT_IGNORE_MAX_SEC)
         try {
             val h = helper() ?: return
             h.set(KEY_MIN_SEC, minSeconds)
             h.set(KEY_PERCENT, percent)
             h.set(KEY_MODE, mode)
+            h.set(KEY_IGNORE_SEC, ignoreMinSeconds)
             h.save()
         } catch (t: Throwable) {
             // 写失败保持内存值，下次再试
@@ -84,10 +101,16 @@ object CountRule {
 
     /** 直接设定门槛（仅测试用；会跳过 config.json 读取） */
     @Synchronized
-    internal fun setForTesting(newMinSec: Int, newPercent: Int, newMode: String) {
+    internal fun setForTesting(
+        newMinSec: Int,
+        newPercent: Int,
+        newMode: String,
+        newIgnoreSec: Int = 0
+    ) {
         minSeconds = newMinSec.coerceIn(LIMIT_MIN_SEC, LIMIT_MAX_SEC)
         percent = newPercent.coerceIn(0, 100)
         mode = if (newMode == "min") "min" else "max"
+        ignoreMinSeconds = newIgnoreSec.coerceIn(LIMIT_IGNORE_MIN_SEC, LIMIT_IGNORE_MAX_SEC)
         // 测试会连续切换规则，重置节流保证下一次 load 真的执行
         lastLoadAt = 0L
     }
@@ -108,6 +131,7 @@ object CountRule {
     fun describe(): String {
         load()
         val modeText = if (mode == "min") "取较小" else "取较大"
-        return minSeconds.toString() + " 秒 或 " + percent + "%，" + modeText
+        val base = minSeconds.toString() + " 秒 或 " + percent + "%，" + modeText
+        return if (ignoreMinSeconds <= 0) base else base + " · <" + ignoreMinSeconds + " 秒不记"
     }
 }

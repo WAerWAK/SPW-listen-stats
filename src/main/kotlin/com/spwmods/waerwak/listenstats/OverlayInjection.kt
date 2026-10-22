@@ -1431,6 +1431,18 @@ private fun OverviewTab(tick: Int) {
                     },
                     modifier = Modifier.weight(1f)
                 )
+                // 跳过率：跳过次数 /（计次 + 跳过）。不计入「没听完但也没跳过」的那部分
+                val skipTotal = snapshot.skipCount
+                val playsTotal = snapshot.totalCount + skipTotal
+                SummaryStat(
+                    label = if (skipTotal > 0) "跳过率 · 共 " + skipTotal + " 次" else "跳过率",
+                    parts = if (playsTotal > 0) {
+                        listOf((skipTotal * 100 / playsTotal).toString() to "%")
+                    } else {
+                        listOf("—" to "")
+                    },
+                    modifier = Modifier.weight(1f)
+                )
             }
         }
     }
@@ -1669,8 +1681,9 @@ private fun RowDivider() {
 @Composable
 private fun RankingTab(tick: Int) {
     var kind by remember { mutableStateOf(0) }
-    // 0=次数 1=时长 2=最近
-    var sortBy by remember { mutableStateOf(0) }
+    // 排序键：0=时长 1=次数 2=跳过 3=上次播放 4=曲目名；默认时长降序
+    var sortKey by remember { mutableStateOf(0) }
+    var asc by remember { mutableStateOf(false) }
     var range by remember { mutableStateOf(0) }
     var songsPage by remember { mutableStateOf(0) }
     var albumsPage by remember { mutableStateOf(0) }
@@ -1700,25 +1713,42 @@ private fun RankingTab(tick: Int) {
             }
         }
         Spacer(Modifier.height(10.dp))
-        // 下排：视图（2/5 靠左）+ 排序（2/5 靠右），中间留 1/5
+        // 下排：视图切换（排序改为点列头，不再单独放一排按钮）
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(2f)) {
                 UnderlineTab("歌曲", kind == 0, Modifier.weight(1f), height = 32.dp) { kind = 0; songsPage = 0 }
                 UnderlineTab("专辑", kind == 1, Modifier.weight(1f), height = 32.dp) { kind = 1; albumsPage = 0 }
                 UnderlineTab("艺术家", kind == 2, Modifier.weight(1f), height = 32.dp) { kind = 2; artistsPage = 0 }
             }
-            Spacer(Modifier.weight(1f))
-            Row(Modifier.weight(2f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SortChip("次数", sortBy == 0, Modifier.weight(1f)) { sortBy = 0; songsPage = 0; albumsPage = 0; artistsPage = 0 }
-                SortChip("时长", sortBy == 1, Modifier.weight(1f)) { sortBy = 1; songsPage = 0; albumsPage = 0; artistsPage = 0 }
-                SortChip("最近", sortBy == 2, Modifier.weight(1f)) { sortBy = 2; songsPage = 0; albumsPage = 0; artistsPage = 0 }
-            }
+            // 视图切换固定占 2/5，其余留白（与删除排序按钮前的宽度一致）
+            Spacer(Modifier.weight(3f))
         }
         Spacer(Modifier.height(10.dp))
+        // 点同一列切换升降序；换列时用该列的默认方向（名称升序、其余降序）
+        val onSort: (Int) -> Unit = { key ->
+            if (sortKey == key) {
+                asc = !asc
+            } else {
+                sortKey = key
+                asc = key == 4
+            }
+            songsPage = 0
+            albumsPage = 0
+            artistsPage = 0
+        }
         when (kind) {
-            0 -> TrackListView(songsPage, tick, sortBy, sinceDate, query, pageSize, { songsPage = it }) { pageSize = it }
-            1 -> AggregateListView(true, albumsPage, tick, sortBy, sinceDate, query, pageSize, { albumsPage = it }) { pageSize = it }
-            else -> AggregateListView(false, artistsPage, tick, sortBy, sinceDate, query, pageSize, { artistsPage = it }) { pageSize = it }
+            0 -> TrackListView(
+                songsPage, tick, sortKey, asc, sinceDate, query, pageSize,
+                { songsPage = it }, { pageSize = it }, onSort
+            )
+            1 -> AggregateListView(
+                true, albumsPage, tick, sortKey, asc, sinceDate, query, pageSize,
+                { albumsPage = it }, { pageSize = it }, onSort
+            )
+            else -> AggregateListView(
+                false, artistsPage, tick, sortKey, asc, sinceDate, query, pageSize,
+                { artistsPage = it }, { pageSize = it }, onSort
+            )
         }
     }
 }
@@ -1814,19 +1844,21 @@ private fun RangeTab(
 private fun TrackListView(
     page: Int,
     tick: Int,
-    sortBy: Int,
+    sortKey: Int,
+    asc: Boolean,
     sinceDate: String?,
     query: String,
     pageSize: Int,
     onPage: (Int) -> Unit,
-    onPageSize: (Int) -> Unit
+    onPageSize: (Int) -> Unit,
+    onSort: (Int) -> Unit
 ) {
-    val data = remember(page, tick, sortBy, sinceDate, query, pageSize) {
-        StatsStore.trackPageRange(page, pageSize, sortBy, query, sinceDate)
+    val data = remember(page, tick, sortKey, asc, sinceDate, query, pageSize) {
+        StatsStore.trackPageRange(page, pageSize, sortKey, asc, query, sinceDate)
     }
     Column(Modifier.fillMaxWidth()) {
         SaltGroup {
-            ListHeader("曲目", "次数", "时长", "上次播放")
+            ListHeader("曲目", sortKey, asc, onSort)
             if (data.items.isEmpty()) {
                 EmptyHint("还没有数据：听几首歌再来")
             }
@@ -1841,6 +1873,7 @@ private fun TrackListView(
                     summary = t.artist + (if (t.album.isBlank()) "" else " · " + t.album),
                     count = t.count.toString() + " 次",
                     duration = formatMs(t.listenedMs),
+                    skip = if (t.skipCount > 0) t.skipCount.toString() + " 次" else "-",
                     lastPlayed = formatLastPlayed(t.lastPlayed),
                     trackKey = t.key,
                     onClick = { key -> TrackDetailState.open.value = key }
@@ -1859,19 +1892,21 @@ private fun AggregateListView(
     byAlbum: Boolean,
     page: Int,
     tick: Int,
-    sortBy: Int,
+    sortKey: Int,
+    asc: Boolean,
     sinceDate: String?,
     query: String,
     pageSize: Int,
     onPage: (Int) -> Unit,
-    onPageSize: (Int) -> Unit
+    onPageSize: (Int) -> Unit,
+    onSort: (Int) -> Unit
 ) {
-    val data = remember(byAlbum, page, tick, sortBy, sinceDate, query, pageSize) {
-        StatsStore.aggregatePageRange(page, pageSize, byAlbum, sinceDate, query, sortBy)
+    val data = remember(byAlbum, page, tick, sortKey, asc, sinceDate, query, pageSize) {
+        StatsStore.aggregatePageRange(page, pageSize, byAlbum, sinceDate, query, sortKey, asc)
     }
     Column(Modifier.fillMaxSize()) {
         SaltGroup {
-            ListHeader(if (byAlbum) "专辑" else "艺术家", "次数", "时长", "上次播放")
+            ListHeader(if (byAlbum) "专辑" else "艺术家", sortKey, asc, onSort)
             if (data.items.isEmpty()) {
                 EmptyHint(if (byAlbum) "还没有专辑数据" else "还没有艺术家数据")
             }
@@ -1890,6 +1925,7 @@ private fun AggregateListView(
                     },
                     count = row.count.toString() + " 次",
                     duration = formatMs(row.listenedMs),
+                    skip = if (row.skipCount > 0) row.skipCount.toString() + " 次" else "-",
                     lastPlayed = formatLastPlayed(row.lastPlayed),
                     trackKey = "",
                     onClick = { },
@@ -2034,19 +2070,19 @@ private fun ActivityHeatmap(
         list
     }
 
-    // 完整网格范围（对齐到周一 ~ 周日）
-    val fullStart: LocalDate
-    val fullEnd: LocalDate
+    // 显示范围：近一年 = 去年今天 → 今天；年份 = 1 月 1 日 → 12 月 31 日
+    val firstDate: LocalDate
+    val lastDate: LocalDate
     if (yearMode < 0) {
-        val start = today.minusDays(364)
-        fullStart = start.minusDays((start.dayOfWeek.value - 1).toLong())
-        fullEnd = today.plusDays((7 - today.dayOfWeek.value).toLong())
+        firstDate = today.minusDays(365)
+        lastDate = today
     } else {
-        val first = LocalDate.of(yearMode, 1, 1)
-        val last = LocalDate.of(yearMode, 12, 31)
-        fullStart = first.minusDays((first.dayOfWeek.value - 1).toLong())
-        fullEnd = last.plusDays((7 - last.dayOfWeek.value).toLong())
+        firstDate = LocalDate.of(yearMode, 1, 1)
+        lastDate = LocalDate.of(yearMode, 12, 31)
     }
+    // 网格按整周对齐，但只绘制 firstDate ~ lastDate 之间的格子（首列不一定是周一）
+    val fullStart = firstDate.minusDays((firstDate.dayOfWeek.value - 1).toLong())
+    val fullEnd = lastDate.plusDays((7 - lastDate.dayOfWeek.value).toLong())
     val fullWeeks = ((fullEnd.toEpochDay() - fullStart.toEpochDay()) / 7L).toInt() + 1
 
     // 动态色阶上限：当前显示范围内「收听时长最高的那一天」
@@ -2072,7 +2108,7 @@ private fun ActivityHeatmap(
     val labelGap = 4.dp
     val gap = 3.dp
 
-    // 格子尺寸：按当前内容宽铺满完整周数，限制在 14–22dp；宽度不够时减列
+    // 格子尺寸：按当前内容宽铺满完整周数，限制在 11–22dp；只有窄到 11dp 都放不下才减列
     var cellDp = 16.dp
     var weeks = fullWeeks
     var gridStart = fullStart
@@ -2081,16 +2117,20 @@ private fun ActivityHeatmap(
     if (containerPx > 0f) {
         val usable = containerPx - labelPx
         if (usable > 0f) {
-            val ideal = (usable - gapPx * (fullWeeks - 1)) / fullWeeks
-            var cell = with(dLocal) { ideal.toDp() }
+            // 先把格子铺满完整周数（上限 22dp）。不再用 11dp 当下限——
+            // 一旦被下限卡住，实际宽度会比可用宽度多出零点几像素，fit 取整后差 1 周，
+            // 又走回「砍掉最早一周」的老路。
+            val exact = (usable - gapPx * (fullWeeks - 1)) / fullWeeks
+            var cell = with(dLocal) { exact.toDp() }
             if (cell > 22.dp) cell = 22.dp
-            if (cell < 14.dp) cell = 14.dp
+            if (cell < 6.dp) cell = 6.dp
             cellDp = cell
             val cellPxNow = with(dLocal) { cellDp.toPx() }
-            val fit = ((usable + gapPx) / (cellPxNow + gapPx)).toInt()
+            // 向上取整：可用宽度差零点几像素时仍算放得下
+            val fit = Math.ceil(((usable + gapPx) / (cellPxNow + gapPx)).toDouble()).toInt()
             if (fit < fullWeeks) {
+                // 只有窄到 6dp 仍放不下（极端窗口）才退化为截断，且保留最早的周
                 weeks = if (fit < 8) 8 else fit
-                // 保留最近的 weeks 周（从末尾往前截断）
                 gridStart = fullEnd.minusDays((weeks - 1L) * 7L + 6L)
             } else {
                 weeks = fullWeeks
@@ -2102,15 +2142,15 @@ private fun ActivityHeatmap(
     val gridHeight = (cellDp + gap) * 7 - gap
     val cellPx = with(dLocal) { cellDp.toPx() }
     // 月份 / 星期标签固定字号，不跟随「字体大小」设置（用 fontScale 反向补偿）
-    val fixedLabelSize = ((cellDp.value * 0.62f).coerceIn(11f, 15f) / dLocal.fontScale).sp
+    val fixedLabelSize = ((cellDp.value * 0.62f).coerceIn(9f, 15f) / dLocal.fontScale).sp
     val labelSize = fixedLabelSize
 
     // 统计摘要
     val summary = remember(tick, yearMode) {
         var activeDays = 0
         var totalMs = 0L
-        val from = if (yearMode < 0) today.minusDays(364) else LocalDate.of(yearMode, 1, 1)
-        val to = if (yearMode < 0) today else LocalDate.of(yearMode, 12, 31)
+        val from = firstDate
+        val to = lastDate
         for (entry in daily.entries) {
             val d = try {
                 LocalDate.parse(entry.key)
@@ -2249,7 +2289,7 @@ private fun ActivityHeatmap(
                                     val insideY = pos.y - row * step <= cellPx
                                     if (col >= 0 && col < weeks && row >= 0 && row < 7 && insideX && insideY) {
                                         val date = gridStart.plusDays(col * 7L + row)
-                                        val inRange = yearMode < 0 || date.year == yearMode
+                                        val inRange = !date.isBefore(firstDate) && !date.isAfter(lastDate)
                                         if (inRange && !date.isAfter(today)) {
                                             hoverKey = date.toString()
                                             hoverX = pos.x
@@ -2274,7 +2314,7 @@ private fun ActivityHeatmap(
                                     val insideY = pos.y - row * step <= cellPx
                                     if (col >= 0 && col < weeks && row >= 0 && row < 7 && insideX && insideY) {
                                         val date = gridStart.plusDays(col * 7L + row)
-                                        val inRange = yearMode < 0 || date.year == yearMode
+                                        val inRange = !date.isBefore(firstDate) && !date.isAfter(lastDate)
                                         if (inRange && !date.isAfter(today)) onSelectDay(date.toString())
                                     }
                                 }
@@ -2286,7 +2326,7 @@ private fun ActivityHeatmap(
                                     var d = 0
                                     while (d < 7) {
                                         val date = gridStart.plusDays(w * 7L + d)
-                                        val inRange = yearMode < 0 || date.year == yearMode
+                                        val inRange = !date.isBefore(firstDate) && !date.isAfter(lastDate)
                                         if (inRange) {
                                             val x = w * (cellPx + gapPx)
                                             val y = d * (cellPx + gapPx)
@@ -2982,26 +3022,66 @@ private fun axisTickLabel(value: Float, byTime: Boolean, axisMax: Float, step: F
     return formatAxisNumber(axisValueMs(value, axisMax), axisValueMs(step, axisMax))
 }
 
-/** monotone cubic 插值：平滑但不会过冲（不产生假峰值） */
+/**
+ * Fritsch–Carlson 单调三次插值
+ *
+ * 关键：对每个点的切线做保单调限幅，曲线只会落在相邻两点的取值范围内，
+ * 不会像 Catmull-Rom 那样在数据突变处冲出绘图区（表现为曲线跑到 x 轴下面）。
+ */
 private fun monotonePath(pts: List<androidx.compose.ui.geometry.Offset>): androidx.compose.ui.graphics.Path {
     val path = androidx.compose.ui.graphics.Path()
-    if (pts.isEmpty()) return path
-    if (pts.size == 1) {
-        path.moveTo(pts[0].x, pts[0].y)
-        return path
-    }
+    val n = pts.size
+    if (n == 0) return path
     path.moveTo(pts[0].x, pts[0].y)
+    if (n == 1) return path
+
+    // 1) 每个区间的斜率
+    val slope = FloatArray(n - 1)
     var i = 0
-    while (i < pts.size - 1) {
-        val p0 = if (i > 0) pts[i - 1] else pts[i]
-        val p1 = pts[i]
-        val p2 = pts[i + 1]
-        val p3 = if (i + 2 < pts.size) pts[i + 2] else p2
-        val c1x = p1.x + (p2.x - p0.x) / 6f
-        val c1y = p1.y + (p2.y - p0.y) / 6f
-        val c2x = p2.x - (p3.x - p1.x) / 6f
-        val c2y = p2.y - (p3.y - p1.y) / 6f
-        path.cubicTo(c1x, c1y, c2x, c2y, p2.x, p2.y)
+    while (i < n - 1) {
+        val dx = pts[i + 1].x - pts[i].x
+        slope[i] = if (dx != 0f) (pts[i + 1].y - pts[i].y) / dx else 0f
+        i++
+    }
+
+    // 2) 每个数据点的切线：极值点取 0，否则取左右斜率均值
+    val m = FloatArray(n)
+    m[0] = slope[0]
+    m[n - 1] = slope[n - 2]
+    i = 1
+    while (i < n - 1) {
+        m[i] = if (slope[i - 1] * slope[i] <= 0f) 0f else (slope[i - 1] + slope[i]) / 2f
+        i++
+    }
+
+    // 3) 保单调限幅（Fritsch–Carlson）
+    i = 0
+    while (i < n - 1) {
+        if (slope[i] == 0f) {
+            m[i] = 0f
+            m[i + 1] = 0f
+        } else {
+            val a = m[i] / slope[i]
+            val b = m[i + 1] / slope[i]
+            val s = a * a + b * b
+            if (s > 9f) {
+                val t = 3f / kotlin.math.sqrt(s)
+                m[i] = t * a * slope[i]
+                m[i + 1] = t * b * slope[i]
+            }
+        }
+        i++
+    }
+
+    // 4) 用限幅后的切线画三次贝塞尔
+    i = 0
+    while (i < n - 1) {
+        val dx = pts[i + 1].x - pts[i].x
+        path.cubicTo(
+            pts[i].x + dx / 3f, pts[i].y + m[i] * dx / 3f,
+            pts[i + 1].x - dx / 3f, pts[i + 1].y - m[i + 1] * dx / 3f,
+            pts[i + 1].x, pts[i + 1].y
+        )
         i++
     }
     return path
@@ -3315,6 +3395,7 @@ private fun ThresholdEditor(onDismiss: () -> Unit) {
     var minSec by remember { mutableStateOf(CountRule.minSeconds) }
     var pct by remember { mutableStateOf(CountRule.percent) }
     var mode by remember { mutableStateOf(CountRule.mode) }
+    var ignoreSec by remember { mutableStateOf(CountRule.ignoreMinSeconds) }
     val p = LocalSaltPalette.current
 
     Box(
@@ -3346,6 +3427,15 @@ private fun ThresholdEditor(onDismiss: () -> Unit) {
                     onMinus = { pct = pct - 5 },
                     onPlus = { pct = pct + 5 }
                 )
+                Spacer(Modifier.height(6.dp))
+                StepperRow(
+                    label = "忽略极短播放",
+                    value = if (ignoreSec <= 0) "关闭" else ignoreSec.toString() + " 秒以下不记",
+                    canMinus = ignoreSec > CountRule.LIMIT_IGNORE_MIN_SEC,
+                    canPlus = ignoreSec < CountRule.LIMIT_IGNORE_MAX_SEC,
+                    onMinus = { ignoreSec = (ignoreSec - 1).coerceAtLeast(CountRule.LIMIT_IGNORE_MIN_SEC) },
+                    onPlus = { ignoreSec = (ignoreSec + 1).coerceAtMost(CountRule.LIMIT_IGNORE_MAX_SEC) }
+                )
                 Spacer(Modifier.height(10.dp))
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -3365,13 +3455,23 @@ private fun ThresholdEditor(onDismiss: () -> Unit) {
                     "听满 " + minSec + " 秒 与 " + pct + "% 时长的较大者"
                 }
                 Text(preview, fontSize = SaltDesign.fontSizeSub, color = p.labelAccent)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    if (ignoreSec <= 0) {
+                        "未开启忽略：极短的播放也会被记录（当前跳过判定只看是否达到门槛）"
+                    } else {
+                        "听不足 " + ignoreSec + " 秒：整条丢弃（不计次数、不计时长、不记跳过）"
+                    },
+                    fontSize = SaltDesign.fontSizeSub,
+                    color = p.subText
+                )
                 Spacer(Modifier.height(16.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     SortChip("取消", selected = false, modifier = Modifier.width(96.dp)) { onDismiss() }
                     Spacer(Modifier.width(10.dp))
                     Surface(
                         onClick = {
-                            CountRule.save(minSec, pct, mode)
+                            CountRule.save(minSec, pct, mode, ignoreSec)
                             onDismiss()
                         },
                         shape = SaltDesign.shapeSmall,
@@ -3560,14 +3660,18 @@ private fun TrackDetailDialog(trackKey: String, onDismiss: () -> Unit) {
                     }
                 }
                 Spacer(Modifier.height(14.dp))
+                val skips = agg?.skipCount ?: 0
+                val plays = (agg?.count ?: 0) + skips
+                val skipRate = if (plays > 0) skips * 100 / plays else 0
                 Row(Modifier.fillMaxWidth()) {
                     KpiCell("总播放", (agg?.count ?: 0).toString() + " 次", Modifier.weight(1f))
                     KpiCell("累计时长", formatMs(agg?.listenedMs ?: 0L), Modifier.weight(1f))
-                    KpiCell("跳过", (agg?.skipCount ?: 0).toString() + " 次", Modifier.weight(1f))
+                    KpiCell("跳过率", skipRate.toString() + "%", Modifier.weight(1f))
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "首次 " + dayText(agg?.firstPlayed ?: 0L) + " · 最近 " + formatLastPlayed(agg?.lastPlayed ?: 0L),
+                    "首次 " + dayText(agg?.firstPlayed ?: 0L) + " · 最近 " + formatLastPlayed(agg?.lastPlayed ?: 0L) +
+                        " · 跳过 " + skips + " 次",
                     fontSize = SaltDesign.fontSizeSub,
                     color = p.subText
                 )
@@ -4240,35 +4344,114 @@ private fun ItemRow(title: String, value: String) {
 
 // ---------------------------------------------------------------- 通用小组件
 
-/** SaltUI Item 风格的表头：强调色竖条 + 大标题 + 两列右对齐 */
+/**
+ * 排序方向小三角
+ *
+ * 始终占住 12dp：不显示时留空，避免切换排序列时文本左右跳动。
+ */
 @Composable
-private fun ListHeader(mainTitle: String, value1: String, value2: String, value3: String = "") {
-    Row(
-        Modifier.fillMaxWidth().height(36.dp),
-        verticalAlignment = Alignment.CenterVertically
+private fun SortArrowSlot(active: Boolean, up: Boolean, color: Color) {
+    Box(Modifier.size(12.dp), contentAlignment = Alignment.Center) {
+        if (active) {
+            Box(
+                Modifier.size(9.dp).drawBehind {
+                    val s = size.minDimension
+                    val path = Path()
+                    if (up) {
+                        path.moveTo(s * 0.10f, s * 0.68f)
+                        path.lineTo(s * 0.5f, s * 0.30f)
+                        path.lineTo(s * 0.90f, s * 0.68f)
+                    } else {
+                        path.moveTo(s * 0.10f, s * 0.32f)
+                        path.lineTo(s * 0.5f, s * 0.70f)
+                        path.lineTo(s * 0.90f, s * 0.32f)
+                    }
+                    path.close()
+                    drawPath(path, color)
+                }
+            )
+        }
+    }
+}
+
+/** 可点击的数值列头（带排序箭头） */
+@Composable
+private fun SortHeaderCell(
+    label: String,
+    key: Int,
+    width: androidx.compose.ui.unit.Dp,
+    currentSort: Int,
+    asc: Boolean,
+    onSort: (Int) -> Unit
+) {
+    val p = LocalSaltPalette.current
+    Surface(
+        onClick = { onSort(key) },
+        color = Color.Transparent,
+        modifier = Modifier.width(width)
     ) {
-        Surface(
-            shape = SaltDesign.shapeSmall,
-            color = LocalSaltPalette.current.highlight,
-            modifier = Modifier.size(width = 4.dp, height = 18.dp)
-        ) {}
-        Spacer(Modifier.width(10.dp))
-        Text(
-            mainTitle,
-            fontSize = 20.sp,
-            color = LocalSaltPalette.current.text,
-            modifier = Modifier.weight(1f)
-        )
-        Box(Modifier.width(56.dp), contentAlignment = Alignment.CenterEnd) {
-            Text(value1, fontSize = 16.sp, color = LocalSaltPalette.current.subText)
+        Row(
+            Modifier.fillMaxWidth().height(36.dp),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                label,
+                fontSize = 16.sp,
+                color = if (currentSort == key) p.highlight else p.subText
+            )
+            SortArrowSlot(currentSort == key, asc, p.highlight)
         }
-        Box(Modifier.width(64.dp), contentAlignment = Alignment.CenterEnd) {
-            Text(value2, fontSize = 16.sp, color = LocalSaltPalette.current.subText)
-        }
-        if (value3.isNotEmpty()) {
-            Box(Modifier.width(112.dp), contentAlignment = Alignment.CenterEnd) {
-                Text(value3, fontSize = 16.sp, color = LocalSaltPalette.current.subText)
+    }
+}
+
+/**
+ * SaltUI Item 风格的表头：强调色竖条 + 大标题 + 可点击排序的数值列
+ *
+ * 点击「曲目」按名称排序，点击数值列按对应字段排序；同一列再点一次切换升/降序。
+ */
+@Composable
+private fun ListHeader(
+    mainTitle: String,
+    currentSort: Int,
+    asc: Boolean,
+    onSort: (Int) -> Unit
+) {
+    val p = LocalSaltPalette.current
+    androidx.compose.runtime.CompositionLocalProvider(
+        androidx.compose.material3.LocalMinimumInteractiveComponentSize provides 0.dp
+    ) {
+        Row(
+            Modifier.fillMaxWidth().height(36.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                onClick = { onSort(4) },
+                color = Color.Transparent,
+                modifier = Modifier.weight(1f)
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().height(36.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        shape = SaltDesign.shapeSmall,
+                        color = p.highlight,
+                        modifier = Modifier.size(width = 4.dp, height = 18.dp)
+                    ) {}
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        mainTitle,
+                        fontSize = 20.sp,
+                        color = if (currentSort == 4) p.highlight else p.text
+                    )
+                    SortArrowSlot(currentSort == 4, asc, p.highlight)
+                }
             }
+            SortHeaderCell("时长", 0, 60.dp, currentSort, asc, onSort)
+            SortHeaderCell("次数", 1, 52.dp, currentSort, asc, onSort)
+            SortHeaderCell("跳过", 2, 52.dp, currentSort, asc, onSort)
+            SortHeaderCell("上次播放", 3, 116.dp, currentSort, asc, onSort)
         }
     }
     Spacer(Modifier.height(6.dp))
@@ -4303,7 +4486,7 @@ private fun TrackCover(coverId: String, diameter: androidx.compose.ui.unit.Dp) {
     }
 }
 
-/** SaltUI Item 风格的两行条目：序号 + 封面 + 标题/副标题 + 右侧两列数值 */
+/** SaltUI Item 风格的两行条目：序号 + 封面 + 标题/副标题 + 右侧数值列 */
 @Composable
 private fun ListRow(
     rank: Int,
@@ -4312,6 +4495,7 @@ private fun ListRow(
     summary: String,
     count: String,
     duration: String,
+    skip: String,
     lastPlayed: String = "",
     trackKey: String,
     onClick: (String) -> Unit,
@@ -4352,14 +4536,17 @@ private fun ListRow(
                     color = LocalSaltPalette.current.subText
                 )
             }
-            Box(Modifier.width(56.dp), contentAlignment = Alignment.CenterEnd) {
-                Text(count, fontSize = SaltDesign.fontSizeSub, color = LocalSaltPalette.current.text)
-            }
-            Box(Modifier.width(64.dp), contentAlignment = Alignment.CenterEnd) {
+            Box(Modifier.width(60.dp), contentAlignment = Alignment.CenterEnd) {
                 Text(duration, fontSize = SaltDesign.fontSizeSub, color = LocalSaltPalette.current.subText)
             }
+            Box(Modifier.width(52.dp), contentAlignment = Alignment.CenterEnd) {
+                Text(count, fontSize = SaltDesign.fontSizeSub, color = LocalSaltPalette.current.text)
+            }
+            Box(Modifier.width(52.dp), contentAlignment = Alignment.CenterEnd) {
+                Text(skip, fontSize = SaltDesign.fontSizeSub, color = LocalSaltPalette.current.subText)
+            }
             if (lastPlayed.isNotEmpty()) {
-                Box(Modifier.width(112.dp), contentAlignment = Alignment.CenterEnd) {
+                Box(Modifier.width(116.dp), contentAlignment = Alignment.CenterEnd) {
                     Text(lastPlayed, fontSize = SaltDesign.fontSizeSub, color = LocalSaltPalette.current.subText)
                 }
             }
@@ -4577,7 +4764,7 @@ private fun weekdayText(date: String): String = try {
 
 private fun formatLastPlayed(timestamp: Long): String {
     if (timestamp <= 0L) return "-"
-    val fmt = SimpleDateFormat("MM-dd HH:mm", Locale.ROOT)
+    val fmt = SimpleDateFormat("yy-MM-dd HH:mm", Locale.ROOT)
     return fmt.format(Date(timestamp))
 }
 

@@ -191,22 +191,19 @@ object SessionTracker {
     /** 结算并写入统计；写入成功后清空崩溃保护的残留 */
     private fun persistFinished(current: Session) {
         val finished = settle(current)
-        if (finished == null) return
-        StatsStore.record(finished)
+        if (finished != null) StatsStore.record(finished)
+        // 即使这一遍被丢弃也要清空崩溃保护，否则下次启动会把它当成未结算会话又恢复一次
         LiveSessionStore.clear()
     }
 
     private fun settle(current: Session): PlayEvent? {
         if (current.listenedMs <= 0L) return null
+        // 极短播放整条丢弃：连点「下一首」不该堆出一串 1~2 秒的噪音记录
+        if (current.listenedMs < StatsThresholds.IGNORE_MIN_MS) return null
         val dur = current.durationMs
         val counted = current.counted
-        var skipped = false
-        if (!counted) {
-            skipped = current.listenedMs < StatsThresholds.SKIP_MIN_MS
-            if (!skipped && dur > 0L) {
-                skipped = current.listenedMs * 100L / dur < 20L
-            }
-        }
+        // 过了忽略阈值但没到计数门槛 → 记一次跳过
+        val skipped = !counted
         return PlayEvent(
             t = wallClock(),
             id = current.meta.id,

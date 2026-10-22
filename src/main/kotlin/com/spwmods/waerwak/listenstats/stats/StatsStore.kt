@@ -554,12 +554,21 @@ object StatsStore {
         return map
     }
 
-    /** 歌曲分页（支持时间范围：sinceDate 为 null 表示总榜） */
+    /** 中文标题排序器（按拼音）；与其它排序一起在同步块内使用 */
+    private val titleCollator: java.text.Collator = java.text.Collator.getInstance(Locale.CHINA)
+
+    /**
+     * 歌曲分页（支持时间范围：sinceDate 为 null 表示总榜）
+     *
+     * @param sortKey 0=时长 1=次数 2=跳过 3=上次播放 4=曲目名
+     * @param asc true = 升序，false = 降序
+     */
     @Synchronized
     fun trackPageRange(
         page: Int,
         pageSize: Int,
-        sortBy: Int,
+        sortKey: Int,
+        asc: Boolean,
         query: String,
         sinceDate: String?
     ): TrackPage {
@@ -573,20 +582,24 @@ object StatsStore {
             sorted.add(agg)
         }
         sorted.sortWith(Comparator { a, b ->
-            // 0=次数 1=时长 2=最近
-            when (sortBy) {
-                1 -> if (a.listenedMs != b.listenedMs) b.listenedMs.compareTo(a.listenedMs)
-                else b.count.compareTo(a.count)
-                2 -> if (a.lastPlayed != b.lastPlayed) b.lastPlayed.compareTo(a.lastPlayed)
-                else b.count.compareTo(a.count)
-                else -> if (a.count != b.count) b.count.compareTo(a.count)
-                else b.listenedMs.compareTo(a.listenedMs)
+            val primary = when (sortKey) {
+                1 -> a.count.compareTo(b.count)
+                2 -> a.skipCount.compareTo(b.skipCount)
+                3 -> a.lastPlayed.compareTo(b.lastPlayed)
+                4 -> titleCollator.compare(a.title, b.title)
+                else -> a.listenedMs.compareTo(b.listenedMs)
             }
+            // 主键相同时按次数降序兜底，保证结果稳定
+            if (primary != 0) (if (asc) primary else -primary) else b.count.compareTo(a.count)
         })
         return buildTrackPage(sorted, page, pageSize)
     }
 
-    /** 专辑 / 艺术家分页（支持时间范围 + 关键词过滤） */
+    /**
+     * 专辑 / 艺术家分页（支持时间范围 + 关键词过滤）
+     *
+     * @param sortKey 0=时长 1=次数 2=跳过 3=上次播放 4=名称
+     */
     @Synchronized
     fun aggregatePageRange(
         page: Int,
@@ -594,7 +607,8 @@ object StatsStore {
         byAlbum: Boolean,
         sinceDate: String?,
         query: String,
-        sortBy: Int = 0
+        sortKey: Int = 0,
+        asc: Boolean = false
     ): AggregatePage {
         ensureLoaded()
         val needle = query.trim().lowercase()
@@ -644,15 +658,14 @@ object StatsStore {
         val sorted = ArrayList<AggregateRow>()
         for (row in map.values) sorted.add(row)
         sorted.sortWith(Comparator { a, b ->
-            // 0=次数 1=时长 2=最近
-            when (sortBy) {
-                1 -> if (a.listenedMs != b.listenedMs) b.listenedMs.compareTo(a.listenedMs)
-                else b.count.compareTo(a.count)
-                2 -> if (a.lastPlayed != b.lastPlayed) b.lastPlayed.compareTo(a.lastPlayed)
-                else b.count.compareTo(a.count)
-                else -> if (a.count != b.count) b.count.compareTo(a.count)
-                else b.listenedMs.compareTo(a.listenedMs)
+            val primary = when (sortKey) {
+                1 -> a.count.compareTo(b.count)
+                2 -> a.skipCount.compareTo(b.skipCount)
+                3 -> a.lastPlayed.compareTo(b.lastPlayed)
+                4 -> titleCollator.compare(a.name, b.name)
+                else -> a.listenedMs.compareTo(b.listenedMs)
             }
+            if (primary != 0) (if (asc) primary else -primary) else b.count.compareTo(a.count)
         })
         val total = sorted.size
         val items = ArrayList<AggregateRow>()
@@ -664,6 +677,7 @@ object StatsStore {
             copy.owner = src.owner
             copy.count = src.count
             copy.listenedMs = src.listenedMs
+            copy.skipCount = src.skipCount
             copy.trackCount = src.trackCount
             copy.coverId = src.coverId
             copy.lastPlayed = src.lastPlayed
@@ -724,6 +738,7 @@ object StatsStore {
     private fun accumulate(row: AggregateRow, agg: TrackAgg) {
         row.count += agg.count
         row.listenedMs += agg.listenedMs
+        row.skipCount += agg.skipCount
         row.trackCount++
         if (agg.lastPlayed > row.lastPlayed) row.lastPlayed = agg.lastPlayed
         if (agg.count > row.bestCount && agg.id.isNotBlank()) {
@@ -946,10 +961,14 @@ object StatsStore {
             recentCount++
         }
 
+        var totalSkips = 0
+        for (agg in tracks.values) totalSkips += agg.skipCount
+
         return StatsSnapshot(
             totalCount = totalCount,
             totalMs = totalMs,
             trackCount = tracks.size,
+            skipCount = totalSkips,
             topTracks = top,
             recentTracks = recent
         )

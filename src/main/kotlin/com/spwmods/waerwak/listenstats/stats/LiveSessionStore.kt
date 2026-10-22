@@ -113,13 +113,14 @@ object LiveSessionStore {
             clear()
             return false
         }
+        // 低于忽略阈值：整条丢弃（顺手清掉残留，避免每次启动都重算）
+        if (ms < StatsThresholds.IGNORE_MIN_MS) {
+            clear()
+            return false
+        }
         val dur = JsonLite.long(text, "dur")
         val counted = JsonLite.bool(text, "c")
-        var skipped = false
-        if (!counted) {
-            skipped = ms < StatsThresholds.SKIP_MIN_MS
-            if (!skipped && dur > 0L) skipped = ms * 100L / dur < 20L
-        }
+        val skipped = !counted
         val start = JsonLite.long(text, "t")
         val event = PlayEvent(
             t = if (start > 0L) start + ms else now,

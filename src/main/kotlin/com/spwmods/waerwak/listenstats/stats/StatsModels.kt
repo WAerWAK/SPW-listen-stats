@@ -100,6 +100,7 @@ data class StatsSnapshot(
     val totalCount: Int,
     val totalMs: Long,
     val trackCount: Int,
+    val skipCount: Int,
     val topTracks: List<TrackAgg>,
     val recentTracks: List<TrackAgg>
 )
@@ -123,6 +124,7 @@ class AggregateRow(val name: String) {
     var lastPlayed: Long = 0L
     var count: Int = 0
     var listenedMs: Long = 0L
+    var skipCount: Int = 0
     var trackCount: Int = 0
     /** 代表曲目的 id（用于取封面：组内听最多那首） */
     var coverId: String = ""
@@ -143,11 +145,11 @@ data class AggregatePage(
 /** 计数与跳过阈值（与 SessionTracker 共用；具体规则由 [CountRule] 维护） */
 internal object StatsThresholds {
 
-    /** 跳过判定：低于该时长且未计数 */
-    val SKIP_MIN_MS: Long
+    /** 低于该时长整条丢弃：不写事件、不计时长、也不记跳过 */
+    val IGNORE_MIN_MS: Long
         get() {
             CountRule.load()
-            return CountRule.minSeconds.toLong() * 1000L
+            return CountRule.ignoreMinSeconds.toLong() * 1000L
         }
 
     fun countThreshold(durationMs: Long): Long = CountRule.thresholdMs(durationMs)
