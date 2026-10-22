@@ -11,10 +11,11 @@ import com.xuncorp.spw.workshop.api.WorkshopApi
 import com.spwmods.waerwak.listenstats.stats.SessionTracker
 
 /**
- * 插件主类（M0 骨架）
+ * 插件主类
  *
- * 只做三件事：记录宿主探测信息、注册全局快捷键、保证面板随插件停用而关闭。
- * 不申请 CLASS_TRANSFORM，也不做任何 Hook。
+ * start()：记录宿主探测信息 → 补记上次未结算的会话 → 注册全局快捷键 →
+ * 安装面板注入（含导航 hook、标题栏按钮、材质桥接层）。
+ * stop()：结算当前这一遍，并卸载全部 hook。
  */
 class ListenStatsPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext) {
 

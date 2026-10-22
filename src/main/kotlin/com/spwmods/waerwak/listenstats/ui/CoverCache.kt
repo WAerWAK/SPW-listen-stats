@@ -80,22 +80,12 @@ object CoverCache {
     val generation = mutableStateOf(0)
 
     /** 诊断计数 */
-    private var memoryHits = 0L
-    private var diskHits = 0L
-    private var hostLoads = 0L
     private var failures = 0L
 
     @Synchronized
     fun cached(id: String): ImageBitmap? {
         if (id.isBlank()) return null
         return bitmaps[id]
-    }
-
-    /** 手动丢一张（暂未使用，供后续诊断/刷新） */
-    @Synchronized
-    fun remove(id: String) {
-        order.remove(id)
-        bitmaps.remove(id)
     }
 
     @Synchronized
@@ -128,25 +118,6 @@ object CoverCache {
             " 张 / 失败 " + failures.toString()
     }
 
-    /** 缓存命中数（信息页诊断用） */
-    @Synchronized
-    fun cachedCount(): Int = bitmaps.size
-
-    @Synchronized
-    private fun bumpMemoryHit() {
-        memoryHits++
-    }
-
-    @Synchronized
-    private fun bumpDiskHit() {
-        diskHits++
-    }
-
-    @Synchronized
-    private fun bumpHostLoad() {
-        hostLoads++
-    }
-
     /**
      * 取封面（阻塞，调用方负责放在 IO 线程）
      *
@@ -155,10 +126,7 @@ object CoverCache {
     fun loadBlocking(id: String): ImageBitmap? {
         if (id.isBlank()) return null
         val hit = cached(id)
-        if (hit != null) {
-            bumpMemoryHit()
-            return hit
-        }
+        if (hit != null) return hit
         if (recentlyFailed(id)) return null
 
         // 磁盘缓存：比再问一次宿主快一个量级
@@ -229,7 +197,6 @@ object CoverCache {
         } catch (t: Throwable) {
             // 没有封面 / 权限不足 / 超时
         }
-        bumpHostLoad()
         return bitmap
     }
 
@@ -290,7 +257,6 @@ object CoverCache {
             val bitmap = image.toComposeImageBitmap()
             // 刷新访问时间，供容量淘汰时优先保留常用封面
             file.setLastModified(System.currentTimeMillis())
-            bumpDiskHit()
             bitmap
         } catch (t: Throwable) {
             try {
@@ -410,7 +376,7 @@ object CoverCache {
 /**
  * 在 Composable 中取封面
  *
- * 直接读缓存（订阅 [CoverCache.version]），所以同一首歌在多处渲染时，
+ * 直接读缓存（订阅 [CoverCache.generation]），所以同一首歌在多处渲染时，
  * 任何一处加载成功都会让其他处立即显示。
  *
  * [CoverCache.generation] 变化（面板重新打开）时会让之前失败的封面再试一次。

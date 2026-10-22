@@ -5,7 +5,7 @@
 <h1 align="center">听歌统计 · Salt Player for Windows 插件</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC-v1.4.0-8B5CF6?labelColor=1F2937" alt="最新版本">
+  <img src="https://img.shields.io/badge/%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC-v1.4.1-8B5CF6?labelColor=1F2937" alt="最新版本">
   <img src="https://img.shields.io/badge/SPW-1.19.0-3B82F6?labelColor=1F2937" alt="SPW 版本">
   <img src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows-0EA5E9?labelColor=1F2937" alt="平台">
   <img src="https://img.shields.io/badge/license-Apache--2.0-22C55E?labelColor=1F2937" alt="许可证">
@@ -63,7 +63,7 @@ GitHub 风格年度热力图（可切换近一年 / 具体年份，悬浮显示�
 
 - 一遍播放的边界：换曲、停止/结束、已计数后又回到开头
 - 有效时长 = `min(位置增量, 墙钟增量)` —— 暂停、卡顿、拖进度条都不会虚增
-- **计数门槛可自定义**：最少秒数 与「曲目时长 × 百分比」之间取较大 / 较小（默认 5 秒 / 50% / 取较小）
+- **计数门槛可自定义**：最少秒数 与「曲目时长 × 百分比」之间取较大 / 较小（默认 30 秒 / 50% / 取较小）
 - 未达门槛的一遍记作「跳过」
 
 ### 数据存储（三层，体积可控）
@@ -111,12 +111,14 @@ com.spwmods.waerwak.listenstats
 
 | 按钮 | 作用 |
 |---|---|
-| 计数门槛设置 | 调整最少秒数 / 百分比 / 取大取小 |
-| 导出 CSV | 导出曲目汇总表（UTF-8 BOM，Excel 可直接打开） |
-| 备份数据 | 打包为 zip（字典 + 聚合 + 明细 + 配置 + 浮钮位置） |
-| 恢复数据 | 从 zip 恢复（现有数据会改名 `.bak` 保留） |
+| 导出 CSV | 弹出保存对话框，导出曲目汇总表（UTF-8 BOM，Excel 可直接打开） |
+| 备份数据 | 打包为 zip（字典 + 聚合 + 明细 + 配置 + 面板状态） |
+| 恢复数据 | 先显示备份摘要，确认后从 zip 恢复（现有数据改名 `.bak` 保留） |
 | 清空统计 | 内存清零，数据文件改名 `.bak`（可恢复） |
-| 安装 / 卸载浮层 | 手动挂载或移除面板注入 |
+| 悬浮按钮-安装 / 卸载 | 显示 / 仅隐藏右下角圆钮（不影响顶栏按钮与面板） |
+| 顶栏按钮-安装 / 卸载 | 添加 / 移除标题栏的统计入口 |
+
+计数门槛、明细保留天数、字体大小、内容宽度上限在面板的「信息」页调整。
 
 ---
 
@@ -156,7 +158,7 @@ com.spwmods.waerwak.listenstats
 一键部署（开发用，会重启 SPW）：
 
 ```powershell
-pwsh -File tools/deploy.ps1 -SpmodPath build/libs/plugin-com.spwmods.waerwak.listenstats-1.0.0.spmod
+pwsh -File tools/deploy.ps1 -SpmodPath build/libs/plugin-com.spwmods.waerwak.listenstats-1.4.1.spmod
 ```
 
 ---
@@ -165,24 +167,32 @@ pwsh -File tools/deploy.ps1 -SpmodPath build/libs/plugin-com.spwmods.waerwak.lis
 
 ```
 src/main/kotlin/com/spwmods/waerwak/listenstats/
-├── ListenStatsPlugin.kt        插件入口（启动/停止、快捷键注册）
+├── ListenStatsPlugin.kt        插件入口（启动/停止、快捷键、注入装配）
 ├── ListenStatsExtension.kt     播放扩展点（转发信号给采集层）
-├── HostProbe.kt                宿主环境探测与数据目录定位
+├── HostProbe.kt                宿主环境探测、数据目录定位、启动日志
 ├── OverlayInjection.kt         Hook 注入 + 全部面板 UI
 ├── stats/
 │   ├── SessionTracker.kt       一遍播放状态机（次数/时长/跳过）
-│   ├── StatsStore.kt           存储（字典 + 按月聚合 + 明细）与查询
-│   ├── StatsModels.kt          数据模型与阈值
+│   ├── StatsStore.kt           存储（按月聚合 + 明细 + 字典）与查询
+│   ├── StatsModels.kt          数据模型
 │   ├── CountRule.kt            计数门槛配置
 │   ├── StorageRule.kt          明细保留天数配置
+│   ├── LiveSessionStore.kt     崩溃恢复（10 秒落盘 + 幂等空标记）
 │   ├── TrackDict.kt            曲目字典（hex key → 元信息）
+│   ├── HeatmapScale.kt         热力图色阶
+│   ├── RangeBuckets.kt         时长分布的时间范围与分桶
+│   ├── GroupKeys.kt            艺术家拆分 / 专辑双键
 │   └── JsonLite.kt             极简 JSON 读写
 └── ui/
     ├── SaltDesign.kt           SaltUI 风格设计 token 与调色板
-    ├── HostAppearance.kt       宿主深浅色同步
-    ├── WallpaperLoader.kt      壁纸背景
+    ├── HostAppearance.kt       宿主深浅色同步、窗口材质判定
+    ├── HostMaterialLayer.kt    材质桥接层（隐藏宿主内容）
+    ├── HostFont.kt             宿主字体同步
+    ├── HostWindow.kt           宿主主窗口定位
+    ├── NavigationHook.kt       导航 / 返回键 hook
+    ├── TitlebarButton.kt       标题栏入口按钮
     ├── CoverCache.kt           封面缩略图缓存（LRU + 128px 降采样）
-    └── UiStateStore.kt         浮钮位置持久化
+    └── UiStateStore.kt         面板 UI 状态持久化
 ```
 
 ---

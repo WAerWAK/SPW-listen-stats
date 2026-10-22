@@ -1,6 +1,5 @@
 package com.spwmods.waerwak.listenstats.stats
 
-import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 
@@ -55,11 +54,11 @@ object RangeBuckets {
             }
             RangePreset.ThisMonth -> {
                 from = today.withDayOfMonth(1)
-                to = if (today < from) from else today
+                to = today
             }
             RangePreset.ThisYear -> {
                 from = today.withDayOfYear(1)
-                to = if (today < from) from else today
+                to = today
             }
             else -> {
                 var f = customFrom
@@ -214,18 +213,4 @@ object RangeBuckets {
         if (from == to) return from.toString()
         return from.toString() + " ~ " + to.toString()
     }
-
-    /** 每周起始周一（供 UI 判断用） */
-    fun mondayOf(date: LocalDate): LocalDate {
-        return date.minusDays((date.dayOfWeek.value - 1).toLong())
-    }
-
-    /** 周末（周日） */
-    fun sundayOf(date: LocalDate): LocalDate {
-        val offset = 7 - date.dayOfWeek.value
-        return date.plusDays(offset.toLong())
-    }
-
-    /** 首日星期（用于图例抽稀，目前未使用但保留以避免未来重复实现） */
-    fun weekdayOf(date: LocalDate): DayOfWeek = date.dayOfWeek
 }

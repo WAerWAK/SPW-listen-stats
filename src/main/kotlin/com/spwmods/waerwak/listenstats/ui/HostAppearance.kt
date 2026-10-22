@@ -36,13 +36,18 @@ object HostAppearance {
         }
     }
 
-    /** 系统深浅色（定时刷新，避免每次重组都起一个进程） */
+    /**
+     * 系统深浅色（定时刷新，避免每次重组都起一个进程）
+     *
+     * 每次刷新要 spawn 一个 reg.exe（实测约 25 ms），所以间隔取 20 秒：
+     * 系统主题切换不是高频操作，没必要每 5 秒查一次。
+     */
     @Composable
     private fun rememberSystemDark(): Boolean {
         val state = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(systemDark()) }
         androidx.compose.runtime.LaunchedEffect(Unit) {
             while (true) {
-                kotlinx.coroutines.delay(5_000L)
+                kotlinx.coroutines.delay(20_000L)
                 val v = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { systemDark() }
                 if (v != state.value) state.value = v
             }

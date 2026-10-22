@@ -2,6 +2,7 @@ package com.spwmods.waerwak.listenstats.test
 
 import com.spwmods.waerwak.listenstats.stats.CountRule
 import com.spwmods.waerwak.listenstats.stats.LiveSessionStore
+import com.spwmods.waerwak.listenstats.stats.PlayEvent
 import com.spwmods.waerwak.listenstats.stats.SessionTracker
 import com.spwmods.waerwak.listenstats.stats.StatsStore
 import com.spwmods.waerwak.listenstats.stats.StatsThresholds
@@ -346,6 +347,93 @@ fun main() {
         )
         check(!LiveSessionStore.recover(), "超过 7 天的残留不应恢复")
         check(totalListenedMs() == 0L, "不应补记任何时长")
+    }
+
+    test("跨小时时长落盘后仍计入小时分布") {
+        val dir = freshEnv()
+        // 14:50 开始听 20 分钟（t 为结束时间 15:10），跨过 15 点
+        val end = localMillis(2026, 10, 19, 15, 10, 0)
+        StatsStore.record(
+            PlayEvent(
+                t = end,
+                id = "crosshour",
+                path = "C:\\Music\\crosshour.flac",
+                title = "跨小时",
+                artist = "歌手",
+                album = "专辑",
+                ms = 20 * MINUTE,
+                dur = 4 * MINUTE,
+                counted = true,
+                skipped = false
+            )
+        )
+        Thread.sleep(400L)
+        val live = StatsStore.hourProfile("2026-10-19", "2026-10-19")
+        // 清空内存，强制重新从磁盘加载
+        StatsStore.resetForTesting(dir)
+        StatsStore.dataDirOrNull()
+        val reloaded = StatsStore.hourProfile("2026-10-19", "2026-10-19")
+        checkNear(reloaded.ms[14], 10 * MINUTE, 1_000L, "重载后 14 点时长")
+        checkNear(reloaded.ms[15], 10 * MINUTE, 1_000L, "重载后 15 点时长")
+        checkNear(reloaded.ms[15], live.ms[15], 1_000L, "重载前后 15 点时长应一致")
+    }
+
+    test("明细事件保留 path") {
+        freshEnv()
+        val end = localMillis(2026, 10, 19, 12, 0, 0)
+        StatsStore.record(
+            PlayEvent(
+                t = end,
+                id = "pathcase",
+                path = "C:\\Music\\pathcase.flac",
+                title = "t",
+                artist = "a",
+                album = "b",
+                ms = MINUTE,
+                dur = 4 * MINUTE,
+                counted = true,
+                skipped = false
+            )
+        )
+        Thread.sleep(400L)
+        val list = StatsStore.trackHistory("pathcase", 10)
+        check(list.size == 1, "应有一条明细，实际 " + list.size)
+        check(
+            list[0].path == "C:\\Music\\pathcase.flac",
+            "明细应保留 path，实际 '" + list[0].path + "'"
+        )
+    }
+
+    test("恢复时拒绝路径穿越条目") {
+        val dir = freshEnv()
+        val zip = File(dir, "evil.zip")
+        val zos = java.util.zip.ZipOutputStream(zip.outputStream())
+        zos.putNextEntry(java.util.zip.ZipEntry("../escape.txt"))
+        zos.write("x".toByteArray(Charsets.UTF_8))
+        zos.closeEntry()
+        zos.close()
+        StatsStore.restoreFrom(zip)
+        val escaped = File(dir.parentFile, "escape.txt")
+        check(!escaped.exists(), "不应写到数据目录之外： " + escaped.absolutePath)
+    }
+
+    test("超期明细归档不覆盖已有文件") {
+        val dir = freshEnv()
+        val events = File(dir, "events")
+        events.mkdirs()
+        File(events, "2020-01-01.jsonl").writeText("{}\n", Charsets.UTF_8)
+        val expired = File(dir, "expired")
+        expired.mkdirs()
+        val existing = File(expired, "2020-01-01.jsonl")
+        existing.writeText("old\n", Charsets.UTF_8)
+        // 重置后重新加载会触发 cleanupExpiredEvents
+        StatsStore.resetForTesting(dir)
+        StatsStore.dataDirOrNull()
+        check(existing.isFile, "已有归档不能被删除")
+        check(existing.readText(Charsets.UTF_8) == "old\n", "已有归档不能被覆盖")
+        val files = expired.listFiles()
+        check(files != null && files.size >= 2, "超期文件应以新名字另存，实际 " + (files?.size ?: 0) + " 个")
+        check(!File(events, "2020-01-01.jsonl").exists(), "原明细应被移走")
     }
 
     println()

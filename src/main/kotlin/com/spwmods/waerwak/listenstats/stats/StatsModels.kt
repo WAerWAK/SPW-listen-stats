@@ -19,6 +19,7 @@ data class PlayEvent(
         sb.append('{')
         sb.append("\"t\":").append(t).append(',')
         sb.append("\"id\":\"").append(JsonLite.escape(id)).append("\",")
+        sb.append("\"path\":\"").append(JsonLite.escape(path)).append("\",")
         sb.append("\"title\":\"").append(JsonLite.escape(title)).append("\",")
         sb.append("\"artist\":\"").append(JsonLite.escape(artist)).append("\",")
         sb.append("\"album\":\"").append(JsonLite.escape(album)).append("\",")
@@ -99,10 +100,8 @@ data class StatsSnapshot(
     val totalCount: Int,
     val totalMs: Long,
     val trackCount: Int,
-    val skippedCount: Int,
     val topTracks: List<TrackAgg>,
-    val recentTracks: List<TrackAgg>,
-    val days: List<DayAgg>
+    val recentTracks: List<TrackAgg>
 )
 
 /** 歌曲分页结果 */

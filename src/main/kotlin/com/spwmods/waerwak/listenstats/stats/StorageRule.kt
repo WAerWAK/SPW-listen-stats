@@ -22,9 +22,6 @@ object StorageRule {
     var rawEventKeepDays: Int = 90
         private set
 
-    @Volatile
-    private var loaded = false
-
     private fun helper(): ConfigHelper? = try {
         WorkshopApi.manager.createConfigManager().getConfig("config.json")
     } catch (t: Throwable) {
@@ -39,7 +36,6 @@ object StorageRule {
      */
     @Synchronized
     fun load() {
-        loaded = true
         try {
             val h = helper() ?: return
             h.reload()

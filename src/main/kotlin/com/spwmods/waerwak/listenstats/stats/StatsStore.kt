@@ -10,10 +10,11 @@ import java.util.Locale
 import java.util.concurrent.Executors
 
 /**
- * 事件日志仓库 + 内存聚合
+ * 统计仓库 + 内存聚合
  *
- * 唯一数据源是 `events/YYYY-MM-DD.jsonl`（append-only，崩溃最多丢最后一行）。
- * 启动时全量重放构建内存索引；播放结束追加一行。
+ * 主数据源是 `daily/YYYY-MM.jsonl`（按月聚合、永久保留，每行约 90 字节）；
+ * `events/YYYY-MM-DD.jsonl` 只是明细（默认保留 90 天，供「最近播放记录」查询）。
+ * 启动时重放 daily 构建内存索引；每次播放结束同时追加明细与聚合行。
  *
  * 注意：本项目刻意不用 Kotlin 的 inline 集合函数（filter/map/also/sortedBy/buildString…）。
  * Kotlin 2.4.21 + Compose 编译器插件 + in-process 编译下，这类内联会触发后端 codegen
@@ -34,7 +35,6 @@ object StatsStore {
 
     private var totalCount: Int = 0
     private var totalMs: Long = 0L
-    private var skippedCount: Int = 0
 
     private var dataDir: File? = null
     private var loaded = false
@@ -147,7 +147,13 @@ object StatsStore {
             target.absolutePath
         }
         val dictFile = File(dir, DICT_FILE)
-        if (targetPath == dictFile.absolutePath) return "备份失败：不能覆盖数据文件"
+        // 两边都用 canonicalPath：absolutePath 与 canonicalPath 在短文件名/符号链接下可能不同
+        val dictPath = try {
+            dictFile.canonicalPath
+        } catch (t: Throwable) {
+            dictFile.absolutePath
+        }
+        if (targetPath == dictPath) return "备份失败：不能覆盖数据文件"
         if (target.exists() && target.isDirectory) return "备份失败：目标是目录"
 
         var zos: java.util.zip.ZipOutputStream? = null
@@ -174,7 +180,12 @@ object StatsStore {
             totalBytes += eventsResult[1]
             for (extra in arrayOf("config.json", "ui-state.json", DICT_FILE + ".bak")) {
                 val f = File(dir, extra)
-                if (f.isFile && f.absolutePath != targetPath) {
+                val fPath = try {
+                    f.canonicalPath
+                } catch (t: Throwable) {
+                    f.absolutePath
+                }
+                if (f.isFile && fPath != targetPath) {
                     writeEntry(zos, f, extra)
                     written++
                     totalBytes += f.length()
@@ -369,6 +380,22 @@ object StatsStore {
                     continue
                 }
                 val target = File(dir, name)
+                // 防 zip slip：entry 名可能是 "../xxx"，解析后必须仍落在数据目录内
+                val basePath = try {
+                    dir.canonicalPath + File.separator
+                } catch (t: Throwable) {
+                    dir.absolutePath + File.separator
+                }
+                val targetPath = try {
+                    target.canonicalPath
+                } catch (t: Throwable) {
+                    ""
+                }
+                if (targetPath.isEmpty() || !targetPath.startsWith(basePath)) {
+                    System.err.println("[listen-stats] 跳过非法备份条目: " + name)
+                    zis.closeEntry()
+                    continue
+                }
                 val parent = target.parentFile
                 if (parent != null) parent.mkdirs()
                 val out = target.outputStream().buffered()
@@ -396,7 +423,7 @@ object StatsStore {
             return "恢复失败：" + t.message
         }
         try {
-            if (zis != null) zis.close()
+            zis.close()
         } catch (e: Throwable) {
             // 忽略
         }
@@ -407,7 +434,6 @@ object StatsStore {
         dayTracks.clear()
         totalCount = 0
         totalMs = 0L
-        skippedCount = 0
         replayedLines = 0
         loaded = false
         dataVersion++
@@ -486,26 +512,6 @@ object StatsStore {
             }
         }
         return HourProfile(counts, ms)
-    }
-
-    /** 按给定日期列表取每天的小时次数矩阵（周视图分层用） */
-    @Synchronized
-    fun hourMatrix(dates: Array<String>): Array<IntArray> {
-        ensureLoaded()
-        val out = Array(dates.size) { IntArray(24) }
-        var d = 0
-        while (d < dates.size) {
-            val dayAgg = days[dates[d]]
-            if (dayAgg != null) {
-                var i = 0
-                while (i < 24) {
-                    out[d][i] = dayAgg.hours[i]
-                    i++
-                }
-            }
-            d++
-        }
-        return out
     }
 
     /** 按时间范围聚合后的曲目（sinceDate 为 null = 总榜；否则只统计 date >= sinceDate） */
@@ -728,19 +734,6 @@ object StatsStore {
         }
     }
 
-    /** 指定日期范围的播放次数（含首尾） */
-    @Synchronized
-    fun countInRange(fromDate: String, toDate: String): Int {
-        ensureLoaded()
-        var total = 0
-        for (entry in days.entries) {
-            val date = entry.key
-            if (date < fromDate || date > toDate) continue
-            total += entry.value.count
-        }
-        return total
-    }
-
     /** 按 hex key 取单曲聚合（拷贝） */
     @Synchronized
     fun trackByKey(key: String): TrackAgg? {
@@ -953,28 +946,12 @@ object StatsStore {
             recentCount++
         }
 
-        val byDay = ArrayList<DayAgg>()
-        for (day in days.values) byDay.add(day)
-        byDay.sortWith(Comparator { a, b -> b.date.compareTo(a.date) })
-        val recentDays = ArrayList<DayAgg>()
-        var dayCount = 0
-        while (dayCount < 30 && dayCount < byDay.size) {
-            val src = byDay[dayCount]
-            val copy = DayAgg(src.date)
-            copy.count = src.count
-            copy.listenedMs = src.listenedMs
-            recentDays.add(copy)
-            dayCount++
-        }
-
         return StatsSnapshot(
             totalCount = totalCount,
             totalMs = totalMs,
             trackCount = tracks.size,
-            skippedCount = skippedCount,
             topTracks = top,
-            recentTracks = recent,
-            days = recentDays
+            recentTracks = recent
         )
     }
 
@@ -988,7 +965,6 @@ object StatsStore {
         dayTracks.clear()
         totalCount = 0
         totalMs = 0L
-        skippedCount = 0
         replayedLines = 0
         if (dir == null) return "已清空（无数据目录）"
 
@@ -1200,7 +1176,6 @@ object StatsStore {
 
         totalCount += count
         totalMs += ms
-        skippedCount += skips
         replayedLines++
     }
 
@@ -1293,8 +1268,12 @@ object StatsStore {
             if (date >= cutoff) continue
             val expired = File(dir, EXPIRED_DIR)
             expired.mkdirs()
-            val target = File(expired, f.name)
-            if (target.exists()) target.delete()
+            var target = File(expired, f.name)
+            if (target.exists()) {
+                // 同名归档已存在（之前归档过同一天）：加时间戳另存，不覆盖也不删除
+                val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(Date())
+                target = File(expired, f.name + "." + stamp + ".bak")
+            }
             if (f.renameTo(target)) moved++
         }
         if (moved > 0) {
@@ -1302,7 +1281,6 @@ object StatsStore {
         }
     }
 
-    /** 一行聚合记录（约 90 字节，不含标题等元信息） */
     /**
      * 把一遍播放拆成「日期 + 小时」的多行聚合记录
      *
@@ -1316,7 +1294,7 @@ object StatsStore {
         val out = ArrayList<String>(3)
         if (event.ms <= 0L) {
             out.add(
-                lineOf(startDate, key, startHour, 0L,
+                lineOf(startDate, key, startHour, startHour, 0L,
                     if (event.counted) 1 else 0, if (event.skipped) 1 else 0, event.t)
             )
             return out
@@ -1342,7 +1320,9 @@ object StatsStore {
             val isStart = date == startDate && hour == startHour
             out.add(
                 lineOf(
-                    date, key, if (isStart) hour else -1, part,
+                    // 次数/跳过只归开始那一行；时长所属小时每行都要写，
+                    // 否则跨小时那段的时长重新加载后进不了任何小时桶
+                    date, key, if (isStart) hour else -1, hour, part,
                     if (isStart && event.counted) 1 else 0,
                     if (isStart && event.skipped) 1 else 0,
                     event.t
@@ -1354,17 +1334,22 @@ object StatsStore {
         }
         if (out.isEmpty()) {
             out.add(
-                lineOf(startDate, key, startHour, 0L,
+                lineOf(startDate, key, startHour, startHour, 0L,
                     if (event.counted) 1 else 0, if (event.skipped) 1 else 0, event.t)
             )
         }
         return out
     }
 
+    /**
+     * @param hour 次数/跳过归属的小时（非开始行为 -1，避免加载时重复累加次数）
+     * @param durHour 这段时长归属的小时（始终是真实小时，加载时按 `hs` 累加到小时分布）
+     */
     private fun lineOf(
         date: String,
         key: String,
         hour: Int,
+        durHour: Int,
         partMs: Long,
         counted: Int,
         skipped: Int,
@@ -1379,7 +1364,7 @@ object StatsStore {
         sb.append("\"sk\":").append(skipped).append(',')
         sb.append("\"hr\":").append(hour).append(',')
         val span = StringBuilder(24)
-        if (hour >= 0 && hour < 24 && partMs > 0L) span.append(hour).append(':').append(partMs)
+        if (durHour >= 0 && durHour < 24 && partMs > 0L) span.append(durHour).append(':').append(partMs)
         sb.append("\"hs\":\"").append(span).append("\",")
         sb.append("\"lt\":").append(lastPlayed)
         sb.append('}')
@@ -1489,7 +1474,6 @@ object StatsStore {
 
         if (event.counted) totalCount++
         totalMs += event.ms
-        if (event.skipped) skippedCount++
         dataVersion++
     }
 }

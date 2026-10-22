@@ -4,9 +4,9 @@ import com.spwmods.waerwak.listenstats.stats.StatsStore
 import java.io.File
 
 /**
- * 面板 UI 状态的持久化（目前只有悬浮圆钮的位置）
+ * 面板 UI 状态的持久化
  *
- * 存到插件数据目录的 ui-state.json，重启软件后仍能恢复拖动后的位置。
+ * 存到插件数据目录的 ui-state.json：浮钮位置、内容宽度百分比、字体增加值、浮钮入口开关。
  * 只做最小 schema，避免引入序列化依赖。
  */
 object UiStateStore {
@@ -18,10 +18,6 @@ object UiStateStore {
 
     @Volatile
     private var entryY: Float = 0f
-
-    /** 额外模糊强度（dp）；3 = 最低档（与底图缩放带来的自然柔化相当） */
-    @Volatile
-    private var backdropBlurDp: Int = 3
 
     /** 内容最大宽度占屏幕宽度的百分比（50–100） */
     @Volatile

@@ -33,7 +33,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -50,7 +49,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.focus.FocusRequester
@@ -67,7 +65,6 @@ import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.layout
-import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.platform.LocalDensity
@@ -95,12 +92,10 @@ import com.spwmods.waerwak.listenstats.stats.RangeBuckets
 import com.spwmods.waerwak.listenstats.stats.RangePreset
 import com.spwmods.waerwak.listenstats.ui.HostAppearance
 import com.spwmods.waerwak.listenstats.ui.LocalSaltPalette
-import com.spwmods.waerwak.listenstats.ui.SaltDarkPalette
 import com.spwmods.waerwak.listenstats.ui.SaltDesign
 import com.spwmods.waerwak.listenstats.ui.UiStateStore
 import com.spwmods.waerwak.listenstats.ui.HostFont
 import com.spwmods.waerwak.listenstats.ui.rememberCover
-import com.spwmods.waerwak.listenstats.ui.SaltLightPalette
 import com.spwmods.waerwak.listenstats.ui.saltPalette
 import com.xuncorp.spw.workshop.api.PluginPermission
 import com.xuncorp.spw.workshop.api.UnstableSpwWorkshopApi
@@ -190,8 +185,6 @@ object OverlayInjection {
         private set
 
     fun installed(): Boolean = handle != null
-
-    fun targetSummary(): String = "$TARGET_CLASS.$TARGET_METHOD  @  $TARGET_IN_CLASS"
 
     @JvmStatic
     @JvmName("installOverlayFromConfig")
@@ -671,7 +664,7 @@ private fun OverlayHost() {
             androidx.compose.ui.platform.LocalDensity provides scaledDensity
         ) {
             // 无论面板开关，都记录一次 overlay 覆盖的内容区矩形：
-            // 首次打开面板时也要靠它把截图限制在内容区（排除侧栏与顶栏）
+            // 用于判断鼠标点击是否落在面板外侧（左侧导航栏 / 标题栏 / 播放条）
             Box(
                 Modifier.fillMaxSize().onGloballyPositioned { coords ->
                     val origin = coords.localToWindow(androidx.compose.ui.geometry.Offset.Zero)
@@ -918,15 +911,18 @@ private fun StatsOverlay(onClose: () -> Unit) {
     var showFontSizeEditor by remember { mutableStateOf(false) }
     var dayDetailDate by remember { mutableStateOf("") }
 
-    // Esc：AWT 层拦截（逐层关闭：弹层 → 面板）
-    OverlayInjection.dismissTopLayer = {
+    // Esc / 返回键：逐层关闭（弹层 → 面板）。
+    // 三个入口（返回键、AWT 全局 Esc、Compose 焦点 Esc）共用同一份层级，
+    // 避免某个弹层在某个入口漏掉 → 按 Esc 把整个面板关掉、弹层状态却还残留。
+    val closeTopLayer: () -> Boolean = {
         var handled = true
         if (showThresholdEditor) {
             showThresholdEditor = false
         } else if (showRetentionEditor) {
             showRetentionEditor = false
-            } else if (dayDetailDate.isNotEmpty()) {
-                dayDetailDate = ""
+        } else if (showFontSizeEditor) {
+            showFontSizeEditor = false
+        } else if (dayDetailDate.isNotEmpty()) {
             dayDetailDate = ""
         } else if (TrackDetailState.open.value != null) {
             TrackDetailState.open.value = null
@@ -939,25 +935,14 @@ private fun StatsOverlay(onClose: () -> Unit) {
         }
         handled
     }
+
+    OverlayInjection.dismissTopLayer = { closeTopLayer() }
     DisposableEffect(Unit) {
         onDispose { OverlayInjection.dismissTopLayer = null }
     }
 
     EscGate.handler = {
-        if (showThresholdEditor) {
-            showThresholdEditor = false
-        } else if (showRetentionEditor) {
-            showRetentionEditor = false
-            } else if (dayDetailDate.isNotEmpty()) {
-                dayDetailDate = ""
-            dayDetailDate = ""
-        } else if (TrackDetailState.open.value != null) {
-            TrackDetailState.open.value = null
-        } else if (CalState.open.value) {
-            CalState.open.value = false
-        } else {
-            onClose()
-        }
+        if (!closeTopLayer()) onClose()
     }
     DisposableEffect(Unit) {
         EscGate.install()
@@ -1001,21 +986,7 @@ private fun StatsOverlay(onClose: () -> Unit) {
                 if (event.type != KeyEventType.KeyDown || event.key != Key.Escape) {
                     false
                 } else {
-                    if (showThresholdEditor) {
-                        showThresholdEditor = false
-                    } else if (showRetentionEditor) {
-                        showRetentionEditor = false
-                    } else if (dayDetailDate.isNotEmpty()) {
-                        dayDetailDate = ""
-                    } else if (TrackDetailState.open.value != null) {
-                        TrackDetailState.open.value = null
-                    } else if (GroupDetailState.open.value.isNotEmpty()) {
-                        GroupDetailState.open.value = ""
-                    } else if (CalState.open.value) {
-                        CalState.open.value = false
-                    } else {
-                        onClose()
-                    }
+                    if (!closeTopLayer()) onClose()
                     true
                 }
             }
@@ -1117,7 +1088,6 @@ private fun StatsOverlay(onClose: () -> Unit) {
     }
     if (CalState.open.value) {
         CalendarPicker(
-            gran = CalState.gran.value,
             initial = CalState.seed.value,
             maxDate = LocalDate.now(),
             onPick = { date ->
@@ -1977,13 +1947,11 @@ private fun CalendarTab(tick: Int, onSelectDay: (String) -> Unit) {
                 onPreset = { preset = it },
                 onPickFrom = {
                     CalState.pickTarget.value = 0
-                    CalState.gran.value = 0
                     CalState.seed.value = customFrom
                     CalState.open.value = true
                 },
                 onPickTo = {
                     CalState.pickTarget.value = 1
-                    CalState.gran.value = 0
                     CalState.seed.value = customTo
                     CalState.open.value = true
                 },
@@ -3047,41 +3015,24 @@ private fun ChevronGlyph(left: Boolean, color: Color, rotateDown: Boolean = fals
     )
 }
 
-/** 柱状图当前悬停的小时索引（-1 表示无） */
-private object HourHover {
-    val index = mutableStateOf(-1)
-}
-
 /** 日历弹窗状态（由面板层渲染） */
 private object CalState {
     val open = mutableStateOf(false)
     val seed = mutableStateOf(LocalDate.now())
     val result = mutableStateOf<LocalDate?>(null)
-    val gran = mutableStateOf(0)
-
     /** 自定义范围选择目标：0 = 开始日期，1 = 结束日期 */
     val pickTarget = mutableStateOf(0)
 }
 
-/** 月历 / 月选择器（按粒度切换形态） */
+/** 月历选择器（选一天） */
 @Composable
 private fun CalendarPicker(
-    gran: Int,
     initial: LocalDate,
     maxDate: LocalDate,
     onPick: (LocalDate) -> Unit,
     onDismiss: () -> Unit
 ) {
     val p = LocalSaltPalette.current
-    if (gran == 2) {
-        MonthPicker(initial = initial, maxDate = maxDate, onPick = onPick, onDismiss = onDismiss)
-        return
-    }
-    if (gran == 1) {
-        WeekPicker(initial = initial, maxDate = maxDate, onPick = onPick, onDismiss = onDismiss)
-        return
-    }
-
     var month by remember { mutableStateOf(initial.withDayOfMonth(1)) }
     val firstMonday = month.minusDays((month.dayOfWeek.value - 1).toLong())
     val maxMonthStart = maxDate.withDayOfMonth(1)
@@ -3089,7 +3040,6 @@ private fun CalendarPicker(
 
     Box(
         Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { onDismiss() }
             .onPointerEvent(PointerEventType.Press) { onDismiss() },
         contentAlignment = Alignment.Center
     ) {
@@ -3190,234 +3140,6 @@ private fun CalendarPicker(
     }
 }
 
-/** 周选择器：每周一个长按钮，显示日期范围与次数 */
-@Composable
-private fun WeekPicker(
-    initial: LocalDate,
-    maxDate: LocalDate,
-    onPick: (LocalDate) -> Unit,
-    onDismiss: () -> Unit
-) {
-    var month by remember { mutableStateOf(initial.withDayOfMonth(1)) }
-    val p = LocalSaltPalette.current
-    val firstOfMonth = month.withDayOfMonth(1)
-    val lastOfMonth = month.withDayOfMonth(month.lengthOfMonth())
-    val startMonday = firstOfMonth.minusDays((firstOfMonth.dayOfWeek.value - 1).toLong())
-    val endSunday = lastOfMonth.plusDays((7 - lastOfMonth.dayOfWeek.value).toLong())
-    val weekTotal = ((endSunday.toEpochDay() - startMonday.toEpochDay()) / 7L).toInt() + 1
-    val selectedMonday = initial.minusDays((initial.dayOfWeek.value - 1).toLong())
-    val maxMonthStart = maxDate.withDayOfMonth(1)
-    val canForward = month.isBefore(maxMonthStart)
-
-    Box(
-        Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { onDismiss() }
-            .onPointerEvent(PointerEventType.Press) { onDismiss() },
-        contentAlignment = Alignment.Center
-    ) {
-        Surface(
-            shape = SaltDesign.shapeLarge,
-            color = p.dialogSurface,
-            shadowElevation = 18.dp,
-            modifier = Modifier.onPointerEvent(PointerEventType.Press) { e -> e.changes.forEach { ch -> ch.consume() } }
-        ) {
-            Column(Modifier.width(420.dp).padding(16.dp)) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Surface(
-                        onClick = { month = month.minusMonths(1) },
-                        shape = SaltDesign.shapeSmall,
-                        color = Color.Transparent,
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            ChevronGlyph(left = true, color = p.subText)
-                        }
-                    }
-                    Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                        Text(
-                            month.year.toString() + " 年 " + month.monthValue + " 月",
-                            fontSize = SaltDesign.fontSizeMain,
-                            color = p.text
-                        )
-                    }
-                    Surface(
-                        onClick = { if (canForward) month = month.plusMonths(1) },
-                        shape = SaltDesign.shapeSmall,
-                        color = Color.Transparent,
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            ChevronGlyph(
-                                left = false,
-                                color = if (canForward) p.subText else p.subText.copy(alpha = 0.25f)
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
-                var w = 0
-                while (w < weekTotal) {
-                    val mon = startMonday.plusDays(w * 7L)
-                    val sun = mon.plusDays(6)
-                    val active = mon == selectedMonday
-                    val future = mon.isAfter(maxDate)
-                    val count = StatsStore.countInRange(mon.toString(), sun.toString())
-                    Surface(
-                        onClick = { if (!future) onPick(mon) },
-                        shape = SaltDesign.shapeMedium,
-                        color = if (active) p.highlight else Color.Transparent,
-                        border = BorderStroke(
-                            1.dp,
-                            SolidColor(if (active) p.highlight else p.subText.copy(alpha = 0.15f))
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            Modifier.fillMaxWidth().height(38.dp).padding(horizontal = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                monthDayText(mon) + " - " + monthDayText(sun),
-                                fontSize = SaltDesign.fontSizeMain,
-                                color = when {
-                                    active -> p.onHighlight
-                                    future -> p.subText.copy(alpha = 0.30f)
-                                    else -> p.text
-                                },
-                                modifier = Modifier.weight(1f)
-                            )
-                            Text(
-                                if (count > 0) count.toString() + " 次" else "-",
-                                fontSize = SaltDesign.fontSizeSub,
-                                color = if (active) p.onHighlight else p.subText
-                            )
-                        }
-                    }
-                    if (w < weekTotal - 1) Spacer(Modifier.height(6.dp))
-                    w++
-                }
-                Spacer(Modifier.height(16.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    SortChip("关闭", selected = false, modifier = Modifier.width(96.dp)) { onDismiss() }
-                }
-            }
-        }
-    }
-}
-
-private fun monthDayText(date: LocalDate): String {
-    return date.monthValue.toString() + "/" + date.dayOfMonth
-}
-
-/** 年 + 12 个月的四行按钮 */
-@Composable
-private fun MonthPicker(
-    initial: LocalDate,
-    maxDate: LocalDate,
-    onPick: (LocalDate) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val p = LocalSaltPalette.current
-    var year by remember { mutableStateOf(initial.year) }
-    val maxMonthStart = maxDate.withDayOfMonth(1)
-    val canForward = year < maxDate.year
-
-    Box(
-        Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { onDismiss() }
-            .onPointerEvent(PointerEventType.Press) { onDismiss() },
-        contentAlignment = Alignment.Center
-    ) {
-        Surface(
-            shape = SaltDesign.shapeLarge,
-            color = p.dialogSurface,
-            shadowElevation = 18.dp,
-            modifier = Modifier.onPointerEvent(PointerEventType.Press) { e -> e.changes.forEach { ch -> ch.consume() } }
-        ) {
-            Column(Modifier.width(340.dp).padding(16.dp)) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Surface(
-                        onClick = { year = year - 1 },
-                        shape = SaltDesign.shapeSmall,
-                        color = Color.Transparent,
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            ChevronGlyph(left = true, color = p.subText)
-                        }
-                    }
-                    Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                        Text(
-                            year.toString() + " 年",
-                            fontSize = SaltDesign.fontSizeMain,
-                            color = p.text
-                        )
-                    }
-                    Surface(
-                        onClick = { if (canForward) year = year + 1 },
-                        shape = SaltDesign.shapeSmall,
-                        color = Color.Transparent,
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            ChevronGlyph(
-                                left = false,
-                                color = if (canForward) p.subText else p.subText.copy(alpha = 0.25f)
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
-                var r = 0
-                while (r < 4) {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        var c = 0
-                        while (c < 3) {
-                            val m = r * 3 + c + 1
-                            val first = LocalDate.of(year, m, 1)
-                            val future = first.isAfter(maxMonthStart)
-                            val active = year == initial.year && m == initial.monthValue
-                            Surface(
-                                onClick = { if (!future) onPick(first) },
-                                shape = SaltDesign.shapeMedium,
-                                color = if (active) p.highlight else Color.Transparent,
-                                border = BorderStroke(
-                                    1.dp,
-                                    SolidColor(
-                                        if (active) p.highlight else p.subText.copy(alpha = 0.18f)
-                                    )
-                                ),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Box(Modifier.height(38.dp), contentAlignment = Alignment.Center) {
-                                    Text(
-                                        m.toString() + " 月",
-                                        fontSize = SaltDesign.fontSizeMain,
-                                        color = when {
-                                            active -> p.onHighlight
-                                            future -> p.subText.copy(alpha = 0.30f)
-                                            else -> p.text
-                                        }
-                                    )
-                                }
-                            }
-                            c++
-                        }
-                    }
-                    if (r < 3) Spacer(Modifier.height(8.dp))
-                    r++
-                }
-                Spacer(Modifier.height(16.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    SortChip("关闭", selected = false, modifier = Modifier.width(96.dp)) { onDismiss() }
-                }
-            }
-        }
-    }
-}
 private fun weekdayShort(index: Int): String = when (index) {
     0 -> "一"
     1 -> "二"
@@ -3459,8 +3181,6 @@ private fun ScrollArea(
     var viewportH by remember { mutableStateOf(0) }
     var contentH by remember { mutableStateOf(0) }
     var offsetY by remember(resetKey) { mutableStateOf(0f) }
-    var vTop by remember { mutableStateOf(0f) }
-    var cTop by remember(resetKey) { mutableStateOf(0f) }
     val density = LocalDensity.current
     val rawMax = (contentH - viewportH).coerceAtLeast(0).toFloat()
     // 差值很小时（不到 60px）不开启滚动：宁可底部少显示一点，也不让顶部被裁
@@ -3477,7 +3197,6 @@ private fun ScrollArea(
             Modifier.fillMaxSize()
                 .onGloballyPositioned {
                     viewportH = it.size.height
-                    vTop = it.positionInRoot().y
                 }
                 .onPointerEvent(PointerEventType.Scroll) { event ->
                     scrollEvents = scrollEvents + 1
@@ -3515,7 +3234,6 @@ private fun ScrollArea(
             ) {
                 Box(
                     Modifier.fillMaxWidth().onSizeChanged { contentH = it.height }
-                        .onGloballyPositioned { cTop = it.positionInRoot().y }
                 ) {
                     content()
                 }
@@ -3556,7 +3274,6 @@ private fun ThresholdEditor(onDismiss: () -> Unit) {
 
     Box(
         Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { onDismiss() }
             .onPointerEvent(PointerEventType.Press) { onDismiss() },
         contentAlignment = Alignment.Center
     ) {
@@ -3662,7 +3379,6 @@ private fun GroupDetailDialog(payload: String, onDismiss: () -> Unit) {
 
     Box(
         Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { onDismiss() }
             .onPointerEvent(PointerEventType.Press) { onDismiss() },
         contentAlignment = Alignment.Center
     ) {
@@ -3771,7 +3487,6 @@ private fun TrackDetailDialog(trackKey: String, onDismiss: () -> Unit) {
 
     Box(
         Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { onDismiss() }
             .onPointerEvent(PointerEventType.Press) { onDismiss() },
         contentAlignment = Alignment.Center
     ) {
@@ -3901,7 +3616,6 @@ private fun DayDetailDialog(date: String, onDismiss: () -> Unit) {
 
     Box(
         Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { onDismiss() }
             .onPointerEvent(PointerEventType.Press) { onDismiss() },
         contentAlignment = Alignment.Center
     ) {
@@ -4056,7 +3770,6 @@ private fun RetentionEditor(onDismiss: () -> Unit) {
     val p = LocalSaltPalette.current
     Box(
         Modifier.fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { onDismiss() }
             .onPointerEvent(PointerEventType.Press) { onDismiss() },
         contentAlignment = Alignment.Center
     ) {
@@ -4769,7 +4482,7 @@ private fun SegmentButton(label: String, selected: Boolean, onClick: () -> Unit)
     }
 }
 
-/** 信息页的模糊强度档位按钮（已移除：背景不再走截图方案） */
+/** 小号文字按钮（分页、关闭等） */
 @Composable
 private fun SmallButton(label: String, enabled: Boolean, onClick: () -> Unit) {
     Surface(
