@@ -610,6 +610,11 @@ object StatsStore {
         return HourProfile(counts, ms)
     }
 
+    /** 列表里是否跳过这首：开了「隐藏缺失曲目」且这首确实缺失 */
+    private fun hideInList(key: String): Boolean {
+        return MissingStore.hidden && MissingStore.isMissingKey(key)
+    }
+
     /** 按时间范围聚合后的曲目（sinceDate 为 null = 总榜；否则只统计 date >= sinceDate） */
     private fun rangeAggregatedTracks(sinceDate: String?): LinkedHashMap<String, TrackAgg> {
         val map = LinkedHashMap<String, TrackAgg>()
@@ -674,6 +679,7 @@ object StatsStore {
         val sorted = ArrayList<TrackAgg>()
         for (agg in source.values) {
             if (agg.count <= 0 && agg.listenedMs <= 0L) continue
+            if (hideInList(agg.key)) continue
             if (needle.isNotEmpty() && !matches(agg, needle)) continue
             sorted.add(agg)
         }
@@ -712,6 +718,7 @@ object StatsStore {
         val map = LinkedHashMap<String, AggregateRow>()
         for (agg in source.values) {
             if (agg.count <= 0 && agg.listenedMs <= 0L) continue
+            if (hideInList(agg.key)) continue
             if (byAlbum) {
                 val album = agg.album.trim()
                 if (album.isEmpty()) continue
@@ -775,6 +782,7 @@ object StatsStore {
             copy.listenedMs = src.listenedMs
             copy.skipCount = src.skipCount
             copy.trackCount = src.trackCount
+            copy.missingCount = src.missingCount
             copy.coverId = src.coverId
             copy.lastPlayed = src.lastPlayed
             items.add(copy)
@@ -805,6 +813,7 @@ object StatsStore {
         val source = rangeAggregatedTracks(sinceDate)
         for (agg in source.values) {
             if (agg.count <= 0 && agg.listenedMs <= 0L) continue
+            if (hideInList(agg.key)) continue
             if (byAlbum) {
                 val album = agg.album.trim()
                 if (album.isEmpty()) continue
@@ -842,6 +851,7 @@ object StatsStore {
         row.listenedMs += agg.listenedMs
         row.skipCount += agg.skipCount
         row.trackCount++
+        if (MissingStore.isMissingKey(agg.key)) row.missingCount++
         if (agg.lastPlayed > row.lastPlayed) row.lastPlayed = agg.lastPlayed
         if (agg.count > row.bestCount && agg.id.isNotBlank()) {
             row.bestCount = agg.count
@@ -1035,7 +1045,7 @@ object StatsStore {
 
         val byCount = ArrayList<TrackAgg>()
         for (agg in tracks.values) {
-            if (agg.count > 0) byCount.add(agg)
+            if (agg.count > 0 && !hideInList(agg.key)) byCount.add(agg)
         }
         byCount.sortWith(Comparator { a, b ->
             if (a.count != b.count) {
@@ -1053,7 +1063,7 @@ object StatsStore {
 
         val byRecent = ArrayList<TrackAgg>()
         for (agg in tracks.values) {
-            if (agg.lastPlayed > 0L) byRecent.add(agg)
+            if (agg.lastPlayed > 0L && !hideInList(agg.key)) byRecent.add(agg)
         }
         byRecent.sortWith(Comparator { a, b -> b.lastPlayed.compareTo(a.lastPlayed) })
         val recent = ArrayList<TrackAgg>()
@@ -1093,6 +1103,8 @@ object StatsStore {
         // TrackDict.ensure() 命中后不再写新字典（旧文件已改名），
         // 重启后这些曲目全部变成空标题 / 空艺术家
         TrackDict.clear()
+        // 缺失记录也跟着清：曲目都没了，留着徽章只会显示一堆「缺失」
+        MissingStore.clear()
         // 让面板的 1.5 秒轮询感知到清空
         dataVersion++
         if (dir == null) return "已清空（无数据目录）"

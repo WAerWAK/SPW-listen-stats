@@ -45,6 +45,21 @@ internal object TrackDict {
 
     fun get(key: String): Entry? = map[key]
 
+    /**
+     * 全部 (hex key → 宿主曲目 id) 快照（缺失检测用）
+     *
+     * id 为空的旧记录无法判定，直接跳过：它们本来也取不到封面。
+     */
+    @Synchronized
+    fun snapshotKeys(): HashMap<String, String> {
+        val out = HashMap<String, String>(map.size * 2)
+        for (entry in map.entries) {
+            val id = entry.value.id
+            if (id.isNotEmpty()) out[entry.key] = id
+        }
+        return out
+    }
+
     fun load(f: File) {
         file = f
         if (!f.isFile) return

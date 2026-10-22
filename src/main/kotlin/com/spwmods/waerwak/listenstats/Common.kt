@@ -44,9 +44,11 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.spwmods.waerwak.listenstats.stats.MissingStore
 import com.spwmods.waerwak.listenstats.ui.LocalSaltPalette
 import com.spwmods.waerwak.listenstats.ui.SaltDesign
 import com.spwmods.waerwak.listenstats.ui.rememberCover
@@ -78,9 +80,78 @@ internal fun GroupHeader(title: String) {
 }
 
 
+/** 单曲行徽章：已判定缺失就是「缺失」，否则空串（不占位） */
+internal fun missingBadgeOf(key: String): String =
+    if (MissingStore.isMissingKey(key)) "缺失" else ""
+
+/** 聚合行徽章：全缺 → 全部缺失；缺一部分 → 部分缺失 */
+internal fun missingGroupBadge(missing: Int, total: Int): String = when {
+    missing <= 0 -> ""
+    total > 0 && missing >= total -> "全部缺失"
+    else -> "部分缺失"
+}
+
+
+/**
+ * 「缺失」胶囊徽章
+ *
+ * 强调色 14% 铺底 + 强调色文字，字号比歌名小一档（歌名 13sp → 这里 11sp），
+ * 高度靠垂直 padding 撑，圆角取高度一半做成胶囊。
+ */
+@Composable
+internal fun MissingBadge(text: String) {
+    val accent = LocalSaltPalette.current.highlight
+    Box(
+        Modifier
+            .drawBehind {
+                drawRoundRect(
+                    color = accent.copy(alpha = 0.14f),
+                    cornerRadius = CornerRadius(size.height / 2f, size.height / 2f),
+                    size = size
+                )
+            }
+            .padding(horizontal = 6.dp, vertical = 1.dp)
+    ) {
+        Text(
+            text,
+            fontSize = 11.sp,
+            lineHeight = 13.sp,
+            color = accent
+        )
+    }
+}
+
+
+/** 标题 + 可选徽章的一行；标题过长只吃掉剩余宽度，不挤掉徽章 */
+@Composable
+internal fun TitleWithBadge(title: String, badge: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            title,
+            fontSize = SaltDesign.fontSizeMain,
+            lineHeight = 17.sp,
+            color = LocalSaltPalette.current.text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false)
+        )
+        if (badge.isNotEmpty()) {
+            Spacer(Modifier.width(6.dp))
+            MissingBadge(badge)
+        }
+    }
+}
+
+
 /** 紧凑版条目（窄列用）：封面 + 标题/副标题 + 右侧单值 */
 @Composable
-internal fun CompactListRow(coverId: String, title: String, summary: String, value: String) {
+internal fun CompactListRow(
+    coverId: String,
+    title: String,
+    summary: String,
+    value: String,
+    badge: String = ""
+) {
     Row(
         Modifier.fillMaxWidth().height(48.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -88,12 +159,7 @@ internal fun CompactListRow(coverId: String, title: String, summary: String, val
         TrackCover(coverId, 30.dp)
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f).padding(end = 6.dp)) {
-            Text(
-                title,
-                fontSize = SaltDesign.fontSizeMain,
-                lineHeight = 17.sp,
-                color = LocalSaltPalette.current.text
-            )
+            TitleWithBadge(title, badge)
             if (summary.isNotBlank()) {
                 Spacer(Modifier.height(1.dp))
                 Text(
@@ -391,6 +457,7 @@ internal fun ListRow(
     skip: String,
     lastPlayed: String = "",
     trackKey: String,
+    badge: String = "",
     onClick: (String) -> Unit,
     onRowClick: (() -> Unit)? = null
 ) {
@@ -415,12 +482,7 @@ internal fun ListRow(
             TrackCover(coverId, 36.dp)
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f).padding(end = 8.dp)) {
-                Text(
-                    title,
-                    fontSize = SaltDesign.fontSizeMain,
-                    lineHeight = 17.sp,
-                    color = LocalSaltPalette.current.text
-                )
+                TitleWithBadge(title, badge)
                 Spacer(Modifier.height(1.dp))
                 Text(
                     summary,

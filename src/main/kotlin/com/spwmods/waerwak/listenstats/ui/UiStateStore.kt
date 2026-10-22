@@ -31,6 +31,10 @@ object UiStateStore {
     @Volatile
     private var entryEnabled: Boolean = true
 
+    /** 榜单里是否显示已判定缺失的曲目（默认显示） */
+    @Volatile
+    private var showMissing: Boolean = true
+
     @Volatile
     private var loaded = false
 
@@ -73,6 +77,17 @@ object UiStateStore {
         writeAll()
     }
 
+    /** 榜单里是否显示已被判定为缺失的曲目（未设置时为 true） */
+    fun loadShowMissing(): Boolean {
+        ensureLoaded()
+        return showMissing
+    }
+
+    fun saveShowMissing(show: Boolean) {
+        showMissing = show
+        writeAll()
+    }
+
     private fun ensureLoaded() {
         if (loaded) return
         loaded = true
@@ -93,6 +108,8 @@ object UiStateStore {
                     }
                     val me = Regex("\"entryEnabled\"\\s*:\\s*(true|false)").find(text)
                     if (me != null) entryEnabled = me.groupValues[1] == "true"
+                    val ms = Regex("\"showMissing\"\\s*:\\s*(true|false)").find(text)
+                    if (ms != null) showMissing = ms.groupValues[1] == "true"
                     val mf = Regex("\"fontExtraPercent\"\\s*:\\s*([0-9]+)").find(text)
                     if (mf != null) {
                         val v = mf.groupValues[1].toIntOrNull()
@@ -119,6 +136,7 @@ object UiStateStore {
                 "{\"entryX\":" + entryX + ",\"entryY\":" + entryY +
                     ",\"contentPercent\":" + contentPercent +
                     ",\"entryEnabled\":" + entryEnabled +
+                    ",\"showMissing\":" + showMissing +
                     ",\"fontExtraPercent\":" + fontExtraPercent + "}"
             )
         } catch (t: Throwable) {

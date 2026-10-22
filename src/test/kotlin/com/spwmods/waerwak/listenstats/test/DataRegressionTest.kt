@@ -2,6 +2,7 @@ package com.spwmods.waerwak.listenstats.test
 
 import com.spwmods.waerwak.listenstats.stats.CountRule
 import com.spwmods.waerwak.listenstats.stats.LiveSessionStore
+import com.spwmods.waerwak.listenstats.stats.MissingStore
 import com.spwmods.waerwak.listenstats.stats.PlayEvent
 import com.spwmods.waerwak.listenstats.stats.SessionTracker
 import com.spwmods.waerwak.listenstats.stats.StatsStore
@@ -530,6 +531,81 @@ fun main() {
         val page = StatsStore.trackPageRange(99, 10, 0, false, "", null)
         check(page.total == 25, "总数应为 25，实际 " + page.total)
         check(page.items.isEmpty(), "越界页应返回空列表而不是崩溃")
+    }
+
+    test("缺失记录落盘后重启仍能判定") {
+        val dir = freshEnv()
+        MissingStore.attach(dir)
+        check(MissingStore.count() == 0, "初始应无缺失记录")
+        check(MissingStore.checkedAt() == 0L, "初始检测时间应为 0")
+
+        MissingStore.setResult(setOf("hexA", "hexB"), setOf("id-1", "id-2"), 1_700_000_000_000L)
+        check(MissingStore.isMissingKey("hexA"), "应判定 hexA 缺失")
+        check(!MissingStore.isMissingKey("hexC"), "未记录的 key 不应判缺失")
+        check(MissingStore.isMissingId("id-2"), "应判定 id-2 缺失")
+        check(File(dir, "missing.txt").isFile, "检测结果应落盘")
+
+        // 模拟重启：丢掉内存后从文件重建
+        MissingStore.attach(dir)
+        check(MissingStore.count() == 2, "重启后缺失数应为 2，实际 " + MissingStore.count())
+        check(MissingStore.checkedAt() == 1_700_000_000_000L, "重启后检测时间应一致")
+        check(MissingStore.isMissingKey("hexB"), "重启后应仍判定 hexB 缺失")
+        check(MissingStore.isMissingId("id-1"), "重启后应仍判定 id-1 缺失")
+
+        MissingStore.clear()
+        MissingStore.attach(dir)
+        check(MissingStore.count() == 0, "清空后不应再有缺失记录")
+        check(!File(dir, "missing.txt").exists(), "清空后应删除记录文件")
+    }
+
+    test("隐藏缺失曲目时榜单与概览同步过滤") {
+        val dir = freshEnv()
+        val keep = track("keep-row", title = "保留的歌")
+        SessionTracker.onTrack(keep)
+        SessionTracker.onPlayingChanged(true)
+        playFor(keep, 0L, 40 * SECOND)
+        SessionTracker.flush()
+        val gone = track("gone-row", title = "消失的歌")
+        SessionTracker.onTrack(gone)
+        SessionTracker.onPlayingChanged(true)
+        playFor(gone, 0L, 40 * SECOND)
+        SessionTracker.flush()
+
+        check(StatsStore.trackPageRange(0, 10, 0, false, "", null).total == 2, "隐藏前应有 2 首")
+        val goneAgg = findTrack("gone-row")
+        check(goneAgg != null, "应该有消失的歌的记录")
+
+        MissingStore.attach(dir)
+        MissingStore.setResult(setOf(goneAgg!!.key), setOf("gone-row"), 1_700_000_100_000L)
+        MissingStore.hidden = false
+        check(MissingStore.isMissingKey(goneAgg.key), "应判定为缺失")
+
+        MissingStore.hidden = true
+        val page = StatsStore.trackPageRange(0, 10, 0, false, "", null)
+        check(page.total == 1, "隐藏后应只剩 1 首，实际 " + page.total)
+        check(page.items.size == 1 && page.items[0].id == "keep-row", "保留的应是 keep-row")
+        val snap = StatsStore.snapshot(10, 10)
+        var inTop = false
+        var i = 0
+        while (i < snap.topTracks.size) {
+            if (snap.topTracks[i].id == "gone-row") inTop = true
+            i++
+        }
+        check(!inTop, "概览 Top 榜不应出现缺失曲目")
+        var inRecent = false
+        var j = 0
+        while (j < snap.recentTracks.size) {
+            if (snap.recentTracks[j].id == "gone-row") inRecent = true
+            j++
+        }
+        check(!inRecent, "概览最近播放不应出现缺失曲目")
+
+        MissingStore.hidden = false
+        check(
+            StatsStore.trackPageRange(0, 10, 0, false, "", null).total == 2,
+            "关掉隐藏后应恢复 2 首"
+        )
+        MissingStore.clear()
     }
 
     println()

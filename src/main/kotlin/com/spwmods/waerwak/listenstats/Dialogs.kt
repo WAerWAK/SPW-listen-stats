@@ -34,6 +34,7 @@ import com.spwmods.waerwak.listenstats.stats.CountRule
 import com.spwmods.waerwak.listenstats.stats.StorageRule
 import com.spwmods.waerwak.listenstats.stats.PlayEvent
 import com.spwmods.waerwak.listenstats.ui.LocalSaltPalette
+import com.spwmods.waerwak.listenstats.ui.MissingState
 import com.spwmods.waerwak.listenstats.ui.SaltDesign
 import com.spwmods.waerwak.listenstats.ui.UiStateStore
 import java.text.SimpleDateFormat
@@ -163,7 +164,11 @@ internal fun GroupDetailDialog(payload: String, onDismiss: () -> Unit) {
     val owner = if (parts.size > 2) parts[2] else ""
     val sinceDate = if (parts.size > 3 && parts[3].isNotEmpty()) parts[3] else null
     // 详情按与榜单相同的时间范围聚合，否则从月榜点进去数字会对不上
-    val items = remember(payload) { StatsStore.tracksOfGroup(byAlbum, name, owner, sinceDate) }
+    // 分组详情也跟随缺失开关与徽章结果
+    val missingTick = MissingState.version.value
+    val items = remember(payload, missingTick) {
+        StatsStore.tracksOfGroup(byAlbum, name, owner, sinceDate)
+    }
     var page by remember(payload) { mutableStateOf(0) }
     val pageSize = 10
     val pageCount = if (items.isEmpty()) 1 else (items.size + pageSize - 1) / pageSize
@@ -217,12 +222,7 @@ internal fun GroupDetailDialog(payload: String, onDismiss: () -> Unit) {
                         TrackCover(t.id, 32.dp)
                         Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f).padding(end = 8.dp)) {
-                            Text(
-                                t.title.ifBlank { "未知曲目" },
-                                fontSize = SaltDesign.fontSizeMain,
-                                lineHeight = 16.sp,
-                                color = p.text
-                            )
+                            TitleWithBadge(t.title.ifBlank { "未知曲目" }, missingBadgeOf(t.key))
                             Spacer(Modifier.height(1.dp))
                             Text(
                                 t.artist,
@@ -301,10 +301,9 @@ internal fun TrackDetailDialog(trackKey: String, onDismiss: () -> Unit) {
                     TrackCover(agg?.id ?: "", 52.dp)
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(
+                        TitleWithBadge(
                             agg?.title?.ifBlank { "未知曲目" } ?: "未知曲目",
-                            fontSize = SaltDesign.fontSizeMain,
-                            color = p.text
+                            missingBadgeOf(trackKey)
                         )
                         Spacer(Modifier.height(2.dp))
                         val artist = agg?.artist ?: ""

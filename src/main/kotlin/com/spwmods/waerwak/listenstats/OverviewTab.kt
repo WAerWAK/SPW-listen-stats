@@ -28,11 +28,14 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import com.spwmods.waerwak.listenstats.stats.StatsStore
 import com.spwmods.waerwak.listenstats.ui.LocalSaltPalette
+import com.spwmods.waerwak.listenstats.ui.MissingState
 import com.spwmods.waerwak.listenstats.ui.SaltDesign
 
 @Composable
 internal fun OverviewTab(tick: Long) {
-    val snapshot = remember(tick) { StatsStore.snapshot(10, 10) }
+    // 检测结果变了要重算：徽章要更新，隐藏开关下列表内容也会变
+    val missingTick = MissingState.version.value
+    val snapshot = remember(tick, missingTick) { StatsStore.snapshot(10, 10) }
     val streak = remember(tick) { StatsStore.currentStreak() }
     val longest = remember(tick) { StatsStore.longestStreak() }
     // 累计收听的三态格式：0=时分 1=天时分 2=天数小数（点击循环）
@@ -71,7 +74,8 @@ internal fun OverviewTab(tick: Long) {
                             coverId = t.id,
                             title = t.title.ifBlank { "未知曲目" },
                             summary = t.artist,
-                            value = formatLastPlayed(t.lastPlayed)
+                            value = formatLastPlayed(t.lastPlayed),
+                            badge = missingBadgeOf(t.key)
                         )
                         i++
                     }
@@ -91,7 +95,8 @@ internal fun OverviewTab(tick: Long) {
                             coverId = t.id,
                             title = t.title.ifBlank { "未知曲目" },
                             summary = t.artist,
-                            value = t.count.toString() + " 次"
+                            value = t.count.toString() + " 次",
+                            badge = missingBadgeOf(t.key)
                         )
                         i++
                     }

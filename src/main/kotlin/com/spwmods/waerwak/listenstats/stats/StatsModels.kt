@@ -126,6 +126,8 @@ class AggregateRow(val name: String) {
     var listenedMs: Long = 0L
     var skipCount: Int = 0
     var trackCount: Int = 0
+    /** 组内缺失曲目数（0 = 都在；等于 trackCount = 全部缺失） */
+    var missingCount: Int = 0
     /** 代表曲目的 id（用于取封面：组内听最多那首） */
     var coverId: String = ""
     /** 内部：当前代表曲目的次数 */

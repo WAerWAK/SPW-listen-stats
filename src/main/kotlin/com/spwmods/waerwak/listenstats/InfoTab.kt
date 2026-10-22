@@ -18,21 +18,26 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
+import com.spwmods.waerwak.listenstats.stats.MissingStore
 import com.spwmods.waerwak.listenstats.stats.StatsStore
 import com.spwmods.waerwak.listenstats.stats.CountRule
 import com.spwmods.waerwak.listenstats.stats.StorageRule
 import com.spwmods.waerwak.listenstats.ui.HostAppearance
 import com.spwmods.waerwak.listenstats.ui.LocalSaltPalette
+import com.spwmods.waerwak.listenstats.ui.MissingDetector
+import com.spwmods.waerwak.listenstats.ui.MissingState
 import com.spwmods.waerwak.listenstats.ui.SaltDesign
 import com.spwmods.waerwak.listenstats.ui.UiStateStore
 import com.spwmods.waerwak.listenstats.ui.HostFont
@@ -80,7 +85,13 @@ internal fun InfoTab(
                         )
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            "计数门槛、明细保留天数、字体大小、内容宽度可在本页调整",
+                            "不计数的播放、缺失曲目检测、明细保留天数、字体大小可在本页调整",
+                            fontSize = SaltDesign.fontSizeSub,
+                            color = p.subText
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "缺失曲目不会自动检测：文件改动后在右侧「数据」组点「检测」才会重新判定",
                             fontSize = SaltDesign.fontSizeSub,
                             color = p.subText
                         )
@@ -163,12 +174,73 @@ internal fun InfoTab(
                             }
                         }
                     }
+                    RowDivider()
+                    // 缺失曲目默认显示；关掉只是从榜单里隐藏，不影响统计与顶部 KPI
+                    val showMissingState = remember { mutableStateOf(!MissingStore.hidden) }
+                    ToggleRow(
+                        label = "显示缺失曲目",
+                        checked = showMissingState.value,
+                        onToggle = { show ->
+                            showMissingState.value = show
+                            MissingStore.hidden = !show
+                            UiStateStore.saveShowMissing(show)
+                            // 榜单/概览按这个版本号重建
+                            MissingState.version.value = MissingState.version.value + 1
+                        }
+                    )
                 }
                 Spacer(Modifier.height(12.dp))
                 // ------------------------------------------------ 数据（统计量 + 保留策略 + 位置）
                 SaltGroup {
                     GroupHeader("数据")
                     ItemRow("曲目数", trackCount.toString() + " 首")
+                    RowDivider()
+                    // 缺失曲目：手动检测 + 结果持久化（missing.txt），不开面板不会跑
+                    val missingTick = MissingState.version.value
+                    val missingCount = remember(missingTick) { MissingStore.count() }
+                    val missingAt = remember(missingTick) { MissingStore.checkedAt() }
+                    val scanning = MissingState.scanning.value
+                    Row(
+                        Modifier.fillMaxWidth().height(34.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "缺失曲目",
+                            fontSize = SaltDesign.fontSizeMain,
+                            color = p.text,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            if (missingCount > 0) missingCount.toString() + " 首"
+                            else if (missingAt > 0L) "无" else "未检测",
+                            fontSize = SaltDesign.fontSizeSub,
+                            color = p.subText
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Surface(
+                            onClick = { if (!scanning) MissingDetector.detect() },
+                            shape = SaltDesign.shapeSmall,
+                            color = p.highlight.copy(alpha = if (scanning) 0.08f else 0.16f)
+                        ) {
+                            Box(
+                                Modifier.height(24.dp).padding(horizontal = 10.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    if (scanning) "检测中…" else "检测",
+                                    fontSize = SaltDesign.fontSizeSub,
+                                    color = p.highlight
+                                )
+                            }
+                        }
+                    }
+                    RowDivider()
+                    ItemRow("上次检测", formatDateTime(missingAt))
+                    RowDivider()
+                    ItemRow(
+                        "检测结果",
+                        if (MissingState.lastMessage.value.isNotBlank()) MissingState.lastMessage.value else "-"
+                    )
                     RowDivider()
                     ItemRow("事件行数", eventLines.toString())
                     RowDivider()
@@ -319,6 +391,39 @@ internal fun AdjustableRow(label: String, value: String, onClick: () -> Unit) {
             ) {
                 Text("调整", fontSize = SaltDesign.fontSizeSub, color = p.highlight)
             }
+        }
+    }
+}
+
+
+/** 自绘胶囊开关（宿主的 Switch 依赖被 R8 裁掉，这里用圆角轨道 + 圆点） */
+@Composable
+internal fun ToggleRow(label: String, checked: Boolean, onToggle: (Boolean) -> Unit) {
+    val p = LocalSaltPalette.current
+    Surface(onClick = { onToggle(!checked) }, color = Color.Transparent, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().height(34.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                label,
+                fontSize = SaltDesign.fontSizeMain,
+                color = p.text,
+                modifier = Modifier.weight(1f)
+            )
+            Box(
+                Modifier.size(width = 34.dp, height = 20.dp).drawBehind {
+                    val h = size.height
+                    drawRoundRect(
+                        color = if (checked) p.highlight else p.subText.copy(alpha = 0.30f),
+                        cornerRadius = CornerRadius(h / 2f, h / 2f),
+                        size = size
+                    )
+                    val r = h / 2f - 2.dp.toPx()
+                    val cx = if (checked) size.width - h / 2f else h / 2f
+                    drawCircle(color = Color.White, radius = r, center = Offset(cx, h / 2f))
+                }
+            ) { }
         }
     }
 }

@@ -5,7 +5,7 @@
 <h1 align="center">听歌统计 · Salt Player for Windows 插件</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC-v1.4.11-8B5CF6?labelColor=1F2937" alt="最新版本">
+  <img src="https://img.shields.io/badge/%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC-v1.4.12-8B5CF6?labelColor=1F2937" alt="最新版本">
   <img src="https://img.shields.io/badge/SPW-1.19.1-3B82F6?labelColor=1F2937" alt="SPW 版本">
   <img src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows-0EA5E9?labelColor=1F2937" alt="平台">
   <img src="https://img.shields.io/badge/license-Apache--2.0-22C55E?labelColor=1F2937" alt="许可证">
@@ -33,7 +33,7 @@
 
 ### 排行
 
-总榜 / 月榜 / 周榜 × 歌曲 / 专辑 / 艺术家 × 次数 / 时长 / 最近；列表显示封面与上次播放时间，**支持按歌曲 / 歌手 / 专辑搜索（含中文输入）**；点歌曲、专辑或艺术家都可以打开各自的详情弹窗（10 条/页，可调 10–50）。
+总榜 / 月榜 / 周榜 × 歌曲 / 专辑 / 艺术家 × 次数 / 时长 / 最近；列表显示封面与上次播放时间，**支持按歌曲 / 歌手 / 专辑搜索（含中文输入）**；点歌曲、专辑或艺术家都可以打开各自的详情弹窗（10 条/页，可调 10–50）。文件已删除或移走的曲目会打上「缺失」标签（专辑 / 艺术家行显示「部分缺失」「全部缺失」）。
 
 <img src="docs/screenshots/ranking.png" width="100%" alt="排行页">
 
@@ -45,7 +45,7 @@ GitHub 风格年度热力图（可切换近一年 / 具体年份，悬浮显示�
 
 ### 信息
 
-插件与宿主环境、采集状态、数据占用、权限状态、运行诊断；可调整计数门槛、明细保留天数、字体大小（0–60%）、内容宽度上限。
+插件与宿主环境、采集状态、数据占用、权限状态、运行诊断；可调整计数门槛、明细保留天数、字体大小（0–60%）、内容宽度上限，以及对缺失曲目做一次检测、开关缺失曲目的显示。
 
 <img src="docs/screenshots/info.png" width="100%" alt="信息页">
 
@@ -65,6 +65,16 @@ GitHub 风格年度热力图（可切换近一年 / 具体年份，悬浮显示�
 - 有效时长 = `min(位置增量, 墙钟增量)` —— 暂停、卡顿、拖进度条都不会虚增
 - **计数门槛可自定义**：最少秒数 与「曲目时长 × 百分比」之间取较大 / 较小（默认 30 秒 / 50% / 取较小）
 - 未达门槛的一遍记作「跳过」
+
+### 缺失曲目
+
+库里记过的曲目、文件被删除或移走后，宿主音乐库中就没有它了，统计里仍保留记录。这类曲目会在榜单、概览、分组详情里标上「缺失」。
+
+- **不会自动检测**：宿主库可能有上万首，检测只在信息页「数据」组点「检测」时执行
+- 检测结果会保存下来（missing.txt），重启后仍然记得
+- 「显示缺失曲目」开关（默认开）：关掉后榜单 / 概览 / 详情里不再列出它们，顶部汇总数字仍按原口径统计
+- 判定缺失的曲目不再向宿主请求封面，省掉每次 4 秒的超时等待
+- 清空统计时缺失记录一起清掉
 
 ### 数据存储（三层，体积可控）
 
@@ -163,7 +173,7 @@ com.spwmods.waerwak.listenstats
 一键部署（开发用，会重启 SPW）：
 
 ```powershell
-pwsh -File tools/deploy.ps1 -SpmodPath build/libs/plugin-com.spwmods.waerwak.listenstats-1.4.11.spmod
+pwsh -File tools/deploy.ps1 -SpmodPath build/libs/plugin-com.spwmods.waerwak.listenstats-1.4.12.spmod
 ```
 
 ---

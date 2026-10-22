@@ -7,6 +7,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asSkiaBitmap
 import androidx.compose.ui.graphics.decodeToImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
+import com.spwmods.waerwak.listenstats.stats.MissingStore
 import com.spwmods.waerwak.listenstats.stats.StatsStore
 import com.xuncorp.spw.workshop.api.WorkshopApi
 import java.io.File
@@ -147,6 +148,10 @@ object CoverCache {
             put(id, fromDisk)
             return fromDisk
         }
+
+        // 已判定缺失的曲目文件都不在了，宿主取图必然失败：别再白等 4 秒超时，
+        // 也别把「取不到」写进失败冷却（已缓存的封面照旧显示，所以放在磁盘之后）
+        if (MissingStore.isMissingId(id)) return null
 
         val pair = obtainFuture(id)
         val target = pair.first

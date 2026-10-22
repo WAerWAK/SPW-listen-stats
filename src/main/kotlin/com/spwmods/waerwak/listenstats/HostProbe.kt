@@ -7,7 +7,9 @@ import com.xuncorp.spw.workshop.api.PlaybackExtensionPoint.MediaItem
 import com.xuncorp.spw.workshop.api.PluginContext
 import com.xuncorp.spw.workshop.api.PluginPermission
 import com.xuncorp.spw.workshop.api.WorkshopApi
+import com.spwmods.waerwak.listenstats.stats.MissingStore
 import com.spwmods.waerwak.listenstats.stats.StatsStore
+import com.spwmods.waerwak.listenstats.ui.UiStateStore
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardOpenOption
@@ -55,7 +57,11 @@ object HostProbe {
         context = ctx
         // 采集层需要数据目录（%APPDATA%\...\workshop\data\<pluginId>）
         try {
-            StatsStore.attach(dataDir())
+            val dir = dataDir()
+            StatsStore.attach(dir)
+            // 缺失检测结果与曲目字典同目录；隐藏开关另存在 ui-state.json
+            MissingStore.attach(dir)
+            MissingStore.hidden = !UiStateStore.loadShowMissing()
         } catch (t: Throwable) {
             System.err.println("[listen-stats] 初始化统计目录失败: ${t.message}")
         }

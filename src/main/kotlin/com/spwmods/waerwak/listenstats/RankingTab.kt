@@ -39,6 +39,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import com.spwmods.waerwak.listenstats.stats.StatsStore
 import com.spwmods.waerwak.listenstats.ui.LocalSaltPalette
+import com.spwmods.waerwak.listenstats.ui.MissingState
 import com.spwmods.waerwak.listenstats.ui.SaltDesign
 import java.time.LocalDate
 
@@ -239,7 +240,9 @@ internal fun TrackListView(
     onPageSize: (Int) -> Unit,
     onSort: (Int) -> Unit
 ) {
-    val data = remember(page, tick, sortKey, asc, sinceDate, query, pageSize) {
+    // 检测结果变了要重算：隐藏开关会改变过滤后的条数和分页，徽章也得跟着换
+    val missingTick = MissingState.version.value
+    val data = remember(page, tick, sortKey, asc, sinceDate, query, pageSize, missingTick) {
         StatsStore.trackPageRange(page, pageSize, sortKey, asc, query, sinceDate)
     }
     Column(Modifier.fillMaxWidth()) {
@@ -262,6 +265,7 @@ internal fun TrackListView(
                     skip = if (t.skipCount > 0) t.skipCount.toString() + " 次" else "-",
                     lastPlayed = formatLastPlayed(t.lastPlayed),
                     trackKey = t.key,
+                    badge = missingBadgeOf(t.key),
                     onClick = { key -> TrackDetailState.open.value = key }
                 )
                 i++
@@ -288,7 +292,8 @@ internal fun AggregateListView(
     onPageSize: (Int) -> Unit,
     onSort: (Int) -> Unit
 ) {
-    val data = remember(byAlbum, page, tick, sortKey, asc, sinceDate, query, pageSize) {
+    val missingTick = MissingState.version.value
+    val data = remember(byAlbum, page, tick, sortKey, asc, sinceDate, query, pageSize, missingTick) {
         StatsStore.aggregatePageRange(page, pageSize, byAlbum, sinceDate, query, sortKey, asc)
     }
     Column(Modifier.fillMaxSize()) {
@@ -315,6 +320,7 @@ internal fun AggregateListView(
                     skip = if (row.skipCount > 0) row.skipCount.toString() + " 次" else "-",
                     lastPlayed = formatLastPlayed(row.lastPlayed),
                     trackKey = "",
+                    badge = missingGroupBadge(row.missingCount, row.trackCount),
                     onClick = { },
                     onRowClick = {
                         // 带上当前榜单范围：详情弹窗按同一范围聚合，数字才和列表行一致
