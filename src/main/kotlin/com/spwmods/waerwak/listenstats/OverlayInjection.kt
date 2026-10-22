@@ -25,9 +25,10 @@ import java.util.Locale
 /**
  * 全屏 Overlay + 边缘浮动入口
  *
- * Hook 目标（SPW 1.19.0 已 javap 实测）：
+ * Hook 目标由 [com.spwmods.waerwak.listenstats.ui.HostUiTargets] 按宿主版本给出（SPW 1.19.1 已 javap 实测）：
  * - `AppNavigationKt.AppNavigation(Composer, int)` 是顶层导航入口，
- *   唯一调用点在混淆类 `androidx.compose.ui.\u06C4`（invokestatic 实测）。
+ *   唯一调用点在混淆类 `androidx.compose.ui.\u0443`（invokestatic 实测）。
+ *   注意：混淆名每次宿主更新都会重排（1.19.0 是 \u06C4），升级后需重新定位。
  * - 之前的 `access$Content` 在导航框架**内部**（仅覆盖内容区）；
  *   迁到 `AppNavigation` 后覆盖整个窗口（含侧栏与顶栏），
  *   这是背景材质方案（隐藏宿主内容 + 透明背景）的前提。
@@ -36,7 +37,7 @@ object OverlayInjection {
 
     private const val TARGET_CLASS = "com.xuncorp.voxzen.ui.navigation.AppNavigationKt"
     private const val TARGET_METHOD = "AppNavigation"
-    private const val TARGET_IN_CLASS = "androidx.compose.ui.\u06C4"
+
 
     @Volatile
     private var handle: HookHandle? = null
@@ -99,6 +100,23 @@ object OverlayInjection {
     var lastError: String? = null
         private set
 
+    /** 把注入结果追加到数据目录的 hook-diag.txt，宿主更新后定位失败原因用 */
+    private fun writeDiag(tag: String, message: String) {
+        try {
+            val dir = StatsStore.dataDirOrNull() ?: return
+            val stamp = SimpleDateFormat("MM-dd HH:mm:ss", Locale.ROOT).format(Date())
+            val line = stamp + "  " + tag + "  " + message + "\n"
+            java.nio.file.Files.write(
+                java.io.File(dir, "hook-diag.txt").toPath(),
+                line.toByteArray(Charsets.UTF_8),
+                java.nio.file.StandardOpenOption.CREATE,
+                java.nio.file.StandardOpenOption.APPEND
+            )
+        } catch (t: Throwable) {
+            // 诊断写不进去不影响功能
+        }
+    }
+
     fun installed(): Boolean = handle != null
 
     @JvmStatic
@@ -136,11 +154,18 @@ object OverlayInjection {
         }
     }
 
+    /** 宿主版本（注入目标按版本选择；取不到时按最新已知处理） */
+    private fun hostVersion(): String = try {
+        HostProbe.pluginContext()?.spwVersion ?: ""
+    } catch (t: Throwable) {
+        ""
+    }
+
     /** 配置页：安装顶栏按钮 */
     @JvmStatic
     @JvmName("installTitlebarFromConfig")
     fun installTitlebarFromConfig() {
-        val ok = com.spwmods.waerwak.listenstats.ui.TitlebarButton.install()
+        val ok = com.spwmods.waerwak.listenstats.ui.TitlebarButton.install(hostVersion())
         if (ok) {
             toast("顶栏按钮已安装（标题栏 Quick 左侧）", true)
         } else {
@@ -180,11 +205,13 @@ object OverlayInjection {
             lastError = "未授予 CLASS_TRANSFORM"
             return "失败：未授予 CLASS_TRANSFORM 权限"
         }
+        // 混淆名随宿主版本变化：按当前宿主版本取注入目标
+        val uiTargets = com.spwmods.waerwak.listenstats.ui.HostUiTargets.forVersion(hostVersion())
         return try {
             handle = WorkshopApi.hookRegistrar.afterComposable(
                 className = TARGET_CLASS,
                 methodName = TARGET_METHOD,
-                inClass = TARGET_IN_CLASS
+                inClass = uiTargets.pageCaller
             ) { _: UiHookCall ->
                 OverlayHost()
             }
@@ -210,14 +237,14 @@ object OverlayInjection {
                 }
             )
             // 标题栏入口（失败静默降级，浮钮仍在）
-            com.spwmods.waerwak.listenstats.ui.TitlebarButton.install()
+            com.spwmods.waerwak.listenstats.ui.TitlebarButton.install(hostVersion())
             // 背景材质桥接层（可选）：替换宿主 AppNavigation 调用，面板打开时隐藏宿主内容
             // 失败则静默降级为现有截图/不透明背景
             try {
                 materialHandle = WorkshopApi.hookRegistrar.replaceComposable(
                     className = TARGET_CLASS,
                     methodName = TARGET_METHOD,
-                    inClass = TARGET_IN_CLASS
+                    inClass = uiTargets.pageCaller
                 ) { _: UiHookCall ->
                     com.spwmods.waerwak.listenstats.ui.HostMaterialLayer()
                 }
@@ -226,6 +253,12 @@ object OverlayInjection {
                 materialHandle = null
             }
             lastError = null
+            // 子项失败不影响主流程，但要在信息页诊断里能看到（不写日志文件）
+            val titlebarError = com.spwmods.waerwak.listenstats.ui.TitlebarButton.lastError
+            val navError = com.spwmods.waerwak.listenstats.ui.NavigationHook.lastError
+            if (titlebarError != null || navError != null) {
+                writeDiag("install-partial", "titlebar=" + (titlebarError ?: "-") + " nav=" + (navError ?: "-"))
+            }
             "已注册：窗口右下角会出现一个「只露一点」的圆"
         } catch (t: Throwable) {
             // 回滚：handle 已赋值时如果只记录错误，installed() 会一直是 true，
@@ -253,6 +286,7 @@ object OverlayInjection {
             } catch (e: Throwable) {
                 // 忽略
             }
+            writeDiag("install", "failed " + t.javaClass.simpleName + ": " + t.message)
             "失败：${t.javaClass.simpleName} — ${t.message ?: ""}"
         }
     }

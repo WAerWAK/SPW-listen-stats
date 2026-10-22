@@ -118,6 +118,19 @@ internal fun ActivityHeatmap(
         best
     }
 
+    // 出现动画：格子按列从左到右依次展开；切换年份 / 日期范围时重播
+    val reveal = remember { androidx.compose.animation.core.Animatable(0f) }
+    androidx.compose.runtime.LaunchedEffect(yearMode) {
+        reveal.snapTo(0f)
+        reveal.animateTo(
+            targetValue = 1f,
+            animationSpec = androidx.compose.animation.core.tween(
+                durationMillis = 620,
+                easing = androidx.compose.animation.core.LinearEasing
+            )
+        )
+    }
+
     val labelCol = 24.dp
     val labelGap = 4.dp
     val gap = 3.dp
@@ -336,41 +349,49 @@ internal fun ActivityHeatmap(
                             }
                             .drawBehind {
                                 val radius = androidx.compose.ui.geometry.CornerRadius(cellPx * 0.18f, cellPx * 0.18f)
+                                val revealProgress = reveal.value
+                                // 把整段进度摊到 (weeks + 8) 列上，每列错开 8 列 —— 从左往右依次亮起
+                                val span = (weeks + 8).toFloat()
                                 var w = 0
                                 while (w < weeks) {
-                                    var d = 0
-                                    while (d < 7) {
-                                        val date = gridStart.plusDays(w * 7L + d)
-                                        val inRange = !date.isBefore(firstDate) && !date.isAfter(lastDate)
-                                        if (inRange) {
-                                            val x = w * (cellPx + gapPx)
-                                            val y = d * (cellPx + gapPx)
-                                            if (date.isAfter(today)) {
-                                                // 年份视图：画一层更淡的底表示「还没到」；
-                                                // 近一年视图不画未来格，让网格以今天结束
-                                                // （两种模式下未来日期都不参与色阶，也不响应悬浮/点击）
-                                                if (yearMode >= 0) {
+                                    val columnAlpha = ((revealProgress * span - w) / 8f).coerceIn(0f, 1f)
+                                    if (columnAlpha > 0f) {
+                                        var d = 0
+                                        while (d < 7) {
+                                            val date = gridStart.plusDays(w * 7L + d)
+                                            val inRange = !date.isBefore(firstDate) && !date.isAfter(lastDate)
+                                            if (inRange) {
+                                                val x = w * (cellPx + gapPx)
+                                                val y = d * (cellPx + gapPx)
+                                                if (date.isAfter(today)) {
+                                                    // 年份视图：画一层更淡的底表示「还没到」；
+                                                    // 近一年视图不画未来格，让网格以今天结束
+                                                    // （两种模式下未来日期都不参与色阶，也不响应悬浮/点击）
+                                                    if (yearMode >= 0) {
+                                                        drawRoundRect(
+                                                            color = futureHeatColor(p.isDark),
+                                                            topLeft = Offset(x, y),
+                                                            size = Size(cellPx, cellPx),
+                                                            cornerRadius = radius,
+                                                            alpha = columnAlpha
+                                                        )
+                                                    }
+                                                } else {
+                                                    val key = date.toString()
+                                                    val agg = daily[key]
+                                                    val ms = if (agg == null) 0L else agg.listenedMs
+                                                    val level = HeatmapScale.level(ms, highMs)
                                                     drawRoundRect(
-                                                        color = futureHeatColor(p.isDark),
+                                                        color = heatColor(level, p.isDark),
                                                         topLeft = Offset(x, y),
                                                         size = Size(cellPx, cellPx),
-                                                        cornerRadius = radius
+                                                        cornerRadius = radius,
+                                                        alpha = columnAlpha
                                                     )
                                                 }
-                                            } else {
-                                                val key = date.toString()
-                                                val agg = daily[key]
-                                                val ms = if (agg == null) 0L else agg.listenedMs
-                                                val level = HeatmapScale.level(ms, highMs)
-                                                drawRoundRect(
-                                                    color = heatColor(level, p.isDark),
-                                                    topLeft = Offset(x, y),
-                                                    size = Size(cellPx, cellPx),
-                                                    cornerRadius = radius
-                                                )
                                             }
+                                            d++
                                         }
-                                        d++
                                     }
                                     w++
                                 }

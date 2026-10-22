@@ -2,6 +2,25 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.4.11] - 2026-10-22
+
+### 修复
+
+- **适配 SPW 1.19.1**：宿主这次更新重新混淆了类名，注入点整批移位 —— 表现为「悬浮按钮-安装」「顶栏按钮-安装」点了没反应（hook 注册时找不到调用点，直接抛异常）
+  - 全屏面板：调用点由 `androidx.compose.ui.ŀ` 变为 `androidx.compose.ui.у`
+  - 标题栏按钮：改为 hook 宿主 caption button `com.xuncorp.voxzen.ui.component.ԩ.Ϳ`，调用点 `androidx.compose.ui.е`（WindowCaption）
+- **标题栏按钮回到右侧 Quick 附近**：1.19.1 的标题栏容器只接受宿主原生 caption button，自绘组件会被排到行首（左上角/侧边栏顶部）。改为 hook 标题栏里唯一的 `DebugCaptionButton` 调用点，并**反射调用宿主自己的 caption button 组件**（把 hook 拿到的 `currentComposer` 传进去），按钮因此直接参与标题栏布局，尺寸、悬停波纹、点击态与宿主按钮一致
+- **按宿主版本选择注入目标**：新增 `HostUiTargets`，把面板 / 标题栏的混淆名按 `1.19.0` / `1.19.1` 分开登记，未适配版本回退到最近已知目标；宿主升级后只需加一条分支
+- 导航 / 返回键 hook 不受影响（`Navigator` 方法名未变）
+- **构建期修复**：宿主 1.19.1 把 `META-INF/runtime.kotlin_module` 清成了 24 字节空壳，Kotlin 编译器看不到 `androidx.compose.runtime` 的顶层函数（`remember` / `mutableStateOf` / `LaunchedEffect` …），插件源码整体无法编译。新增 `libs/runtime-module-patch.jar` 补回包映射（仅编译期生效，不打包进插件），生成脚本见 `tools/gen-runtime-module-patch.py`
+- 修复 `runDataTests` 在 clean 之后因 `build/test-run` 不存在而启动失败
+
+### 改进
+
+- **标题栏图标尺寸**：按图标槽位短边取正方形绘制，频谱总宽 91%、最高柱 74%，与左右原生图标视觉一致（之前偏小且会被压扁）
+- **Tab 切换动画**：四页之间改为水平位移 —— 向右切时旧页左滑消失、新页从右侧滑入；向左切反向。打开面板仍是从下往上的宿主动效，关闭仍直接消失
+- **热力图出现动画**：格子按列从左到右依次亮起（620ms），切换「近一年 / 某一年」时重播
+
 ## [1.4.10] - 2026-10-22
 
 ### 修复

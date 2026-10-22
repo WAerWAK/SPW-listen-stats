@@ -10,7 +10,9 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
@@ -564,14 +566,21 @@ internal fun StatsOverlay(onClose: () -> Unit) {
                 TabBar(selected = tab, onSelect = { tab = it })
                 Spacer(Modifier.height(14.dp))
                 Box(Modifier.fillMaxWidth().weight(1f)) {
-                    // 四页切换：旧页快速淡出，新页从下方 150px 滑入（对齐宿主 AppNavigation 的动效）
+                    // 四页切换：按 Tab 顺序做水平位移 ——
+                    // 往右切（概览→排行→活跃度→信息）旧页左滑消失、新页从右侧滑入；
+                    // 往左切反向。节奏沿用宿主的 spring(stiffness 500)。
                     AnimatedContent(
                         targetState = tab,
                         modifier = Modifier.fillMaxSize(),
                         transitionSpec = {
-                            (slideInVertically(animationSpec = spring(stiffness = 500f)) { 150 } +
+                            val forward = targetState > initialState
+                            val slideSpec: androidx.compose.animation.core.FiniteAnimationSpec<androidx.compose.ui.unit.IntOffset> =
+                                spring(stiffness = 500f)
+                            val enterFrom = if (forward) 1 else -1
+                            (slideInHorizontally(animationSpec = slideSpec) { fullWidth -> enterFrom * fullWidth } +
                                 fadeIn(animationSpec = spring(stiffness = 500f))) togetherWith
-                                fadeOut(animationSpec = spring(stiffness = 500f))
+                                (slideOutHorizontally(animationSpec = slideSpec) { fullWidth -> -enterFrom * fullWidth } +
+                                    fadeOut(animationSpec = spring(stiffness = 500f)))
                         },
                         label = "tab-switch"
                     ) { currentTab ->

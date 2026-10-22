@@ -41,7 +41,7 @@ import java.time.LocalDate
 internal fun CalendarTab(tick: Int, onSelectDay: (String) -> Unit) {
     // 全量按天数据：热力图的年份视图 / 时长分布的自定义区间都按日历查值，
     // 用「最近 N 天」会让更早的日期静默变成「无收听」（显示范围外还会漏年份）
-    val days = remember(tick) { StatsStore.allDays() }
+    val days: List<DayAgg> = remember(tick) { StatsStore.allDays() }
     val map = HashMap<String, DayAgg>()
     var i = 0
     while (i < days.size) {

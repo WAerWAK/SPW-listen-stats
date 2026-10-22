@@ -1,112 +1,75 @@
 # Hook 目标定位手册
 
-宿主更新后，下面这些混淆名大概率会变。本文记录**怎么重新找**，以及本次（SPW 1.19.0 / Steam）已经确认的结果。
+宿主更新后，下面这些混淆名大概率会变。本文记录**怎么重新找**，以及已确认的结果。
 
-## 已经确认的目标
+代码里通过 `ui/HostUiTargets.kt` 按宿主版本选择目标（`PluginContext.spwVersion`），
+调用点不再写死类名。新增宿主版本时在那里加一条分支即可。
 
-```
-className = androidx.compose.ui.ȫ        (U+022B)
-methodName = Ϳ                          (U+037F)
-inClass    = com.xuncorp.voxzen.ui.navigation.ComposableSingletons$AppNavigation_desktopKt
-语义        = 插件配置页 ScreenRoute.ModConfigContent 的 Composable
-```
+## 已确认的注入目标
 
-完整签名：
+| 用途 | SPW 1.19.0 | SPW 1.19.1 | 说明 |
+| --- | --- | --- | --- |
+| 面板 / 材质桥接层 inClass | `androidx.compose.ui.ư` (`\u06C4`) | `androidx.compose.ui.у` (`\u0443`) | `AppNavigationKt.AppNavigation` 的调用点，两版都唯一 |
+| 标题栏按钮 className | `androidx.compose.ui.Ӵ` (`\u04F4`) | `androidx.compose.ui.๊` (`\u063A`) | 标题栏里的 DebugCaptionButton 模板 |
+| 标题栏按钮 inClass | `androidx.compose.ui.ȅ` (`\u0205`) | `androidx.compose.ui.๊` → 见下 | 1.19.1 改为 `androidx.compose.ui.๏` (`\u09F1`) |
 
-```
-public static final void Ϳ(
-    com.xuncorp.voxzen.ui.navigation.ScreenRoute$ModConfigContent,
-    androidx.compose.ui.શ,          // 配置页 ViewModel
-    androidx.compose.runtime.Composer,
-    int, int
-)
-```
+方法名两版都是 `\u037F`（`Ϳ`）。
 
-调用点（inClass 内唯一）：
+### 1.19.1 的两处关键差异
 
-```
-103: invokestatic androidx/compose/ui/ȫ.Ϳ:(Lcom/xuncorp/voxzen/ui/navigation/ScreenRoute$ModConfigContent;Landroidx/compose/ui/શ;Landroidx/compose/runtime/Composer;II)V
-```
+1. **标题栏容器只接受原生 caption button**
+   自绘组件（`Box { ... }`）插进去会被排到容器行首（表现为按钮跑到左上角或侧边栏顶部）。
+   必须反射调用宿主 caption 组件：
+   `com.xuncorp.voxzen.ui.component.ԩ.Ϳ(Function0, String, Modifier, boolean, String, float, Function3<BoxScope>, Composer, int, int)`，
+   把 hook 回调里的 `currentComposer` 传进去。
+
+2. **`META-INF/runtime.kotlin_module` 被清空**
+   宿主把该模块压成了 24 字节空壳，Kotlin 编译器因此看不到 `androidx.compose.runtime` 的顶层函数
+   （`remember` / `mutableStateOf` / `LaunchedEffect` …），插件源码整体无法编译。
+   解决：`tools/gen-runtime-module-patch.py` 重新生成包映射，产出 `libs/runtime-module-patch.jar`
+   作为 compileOnly 的前置依赖（不打包进插件）。
 
 ## 重新定位的步骤
 
-### 1. 找到“哪个类实现了某个屏幕”
+### 1. 找「哪个类调用了某个方法」
 
-宿主的屏幕实现类被 R8 改成单字符名，但**字符串常量里保留了原始函数名**（例如 `ModConfigScreen`）。所以在 jar 里按字符串反查：
+用 Python 解析 class 文件常量池里的 Methodref（比字符串搜索准）：
 
-```powershell
-$jar = 'D:\Games\Steam\Steam\steamapps\common\Salt Player for Windows\app\ffmpeg-x64.dll'
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-$z = [System.IO.Compression.ZipFile]::OpenRead($jar)
-$enc = [Text.Encoding]::GetEncoding(28591)   # Latin1：字节到字符一一对应
-foreach ($e in $z.Entries) {
-    if ($e.FullName -notlike '*.class') { continue }
-    $s = $e.Open(); $ms = New-Object IO.MemoryStream; $s.CopyTo($ms); $s.Close()
-    $t = $enc.GetString($ms.ToArray())
-    if ($t -match 'ModConfigScreen|ModManagementScreen|WorkshopScreen') { $e.FullName }
-}
+```python
+# 解析 constant_pool，找 owner=? 且 name=? 的 Methodref
+# 输出所有引用该方法的 class 文件名（ascii 转义显示非 ASCII 名）
 ```
+
+注意：**不要用 PowerShell 的 `Select-String` 直接搜 `\u063A` 这类转义文本**，
+javap 输出里是真实字符，必须用 `[char]0x063A` 拼字符串来匹配。
 
 ### 2. 反汇编目标类
 
-`javap` 直接用非 ASCII 类名当参数会被命令行编码搞坏，所以先提取成 ASCII 文件名：
+`javap` 直接用非 ASCII 类名当参数会被命令行编码搞坏，先把 class 提取成 ASCII 文件名：
 
 ```powershell
-$target = 'androidx/compose/ui/ȫ.class'      # 换成上一步的结果
+$target = 'androidx/compose/ui/<类名>.class'
 $e = $z.Entries | Where-Object { $_.FullName -eq $target }
-$ms = New-Object IO.MemoryStream; $e.Open().CopyTo($ms)
-[IO.File]::WriteAllBytes('D:\tmp\probe.class', $ms.ToArray())
+[IO.File]::WriteAllBytes('D:\tmp\probe\probe.class', $eBytes)
+& 'D:\Projects\.tools\jdk25\bin\javap.exe' -p -c 'D:\tmp\probe\probe.class'
 ```
 
-```powershell
-$javap = 'D:\Projects\.tools\jdk25\bin\javap.exe'   # 必须 JDK 25：宿主类是 class file 69
-$env:JAVA_TOOL_OPTIONS = '-Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8'
-[Console]::OutputEncoding = [Text.Encoding]::UTF8
-& $javap -p 'D:\tmp\probe.class'                    # 看方法名与签名
-& $javap -p -c 'D:\tmp\probe.class'                 # 看字节码（找调用点）
-Remove-Item Env:JAVA_TOOL_OPTIONS
-```
+要点：`-p` 必须加（private 的 Composable 也要看到）；环境变量设 `JAVA_TOOL_OPTIONS=-Dstdout.encoding=UTF-8`。
 
-要点：`-p` 必须加，`private static final` 的 Composable 也要看到。
-
-### 3. 找调用方（inClass）
-
-Hook API 要求 “`inClass` 内唯一匹配该 Composable 调用”。调用方通常是：
-- `ComposableSingletons$AppNavigation_desktopKt`（导航树的 lambda 单例，绝大多数屏幕都在这）
-- `AppNavigationKt` / `AppNavigation_desktopKt`（导航构建）
-- 具体屏幕内部（组件级注入时）
-
-反查方式：拿目标类的 UTF-8 字节序列在 jar 里搜引用者：
-
-```powershell
-$needle = $enc.GetString([Text.Encoding]::UTF8.GetBytes('androidx/compose/ui/ȫ'))
-# 遍历所有 class，$t.Contains($needle) 的即是引用方
-```
-
-然后在引用方里 `javap -c` 搜 `invokestatic` / `invokeinterface` 到目标方法的行，确认**只出现一次**。
-
-### 4. 组装三元组
+### 3. 组装三元组
 
 | Hook API 参数 | 取值 |
 | --- | --- |
-| `className` | 被调用 Composable 所在的类（上一步的 `ȫ`） |
-| `methodName` | 该函数名（`Ϳ`） |
-| `parameterTypes` | UI Hook 只填**业务参数**，不含 `Composer`/`int`/`boolean`；若 `inClass` 内该调用唯一可传 `null` |
-| `inClass` | 调用点所在类 |
-
-源码里用 `\uXXXX` 写非 ASCII 名字，例如 `"androidx.compose.ui.\u022B"`、`"\u037F"`，避免源文件编码问题。
-
-## 下一步可用的候选注入点
-
-| 界面 | 特征字符串 | 备注 |
-| --- | --- | --- |
-| 插件配置页 | `ModConfigScreen` | 已确认，demo 用它 |
-| 模组管理页 | `ModManagementScreen` | 命中 `androidx/compose/ui/ড়`、`ת`（含 `$ֈ`、`$ހ`） |
-| 工坊页 | `WorkshopScreen` | 命中 `androidx/compose/ui/Ԁ`、`ʬ` |
-| 侧栏/导航 | `ScreenRoute` + `NavigationBar` 相关 | 可用于加入口，需进一步定位 |
+| `className` | 被调用 Composable 所在类 |
+| `methodName` | 该函数名 |
+| `parameterTypes` | 只填**业务参数**（不含 `Composer` / `int`）；用于在多个重载中消歧，无重载可传 `emptyList()` |
+| `inClass` | 调用点所在类，且该类内该调用必须**唯一**（否则注册报歧义） |
 
 ## 已知限制
 
-- **注入位置由宿主布局决定**：`afterComposable` 只是“在调用点之后追加”，父容器若是 `Box` 会叠在页面上，若是 `Column` 则自然排在后面。实测确认前不要假设位置。
-- **`replaceComposable` 不会渲染原组件**，除非能完整复刻，否则不要替换宿主实屏。
-- **配置页 hook 是全局的**：`ModConfigContent` 是所有插件的配置页，注入内容会出现在任意插件的配置页。要限定到本插件，需要在注入内容里读取 `call.arguments`（其中含 `ScreenRoute.ModConfigContent` 数据）并判断插件 ID。
+- **inClass 内必须唯一**：标题栏主类 `androidx.compose.ui.ע` 里 caption button 有 3 处同签名调用，
+  右侧按钮组 `androidx.compose.ui.ȅ` 里图标按钮有 2 处同签名调用 —— 这些都无法用 `afterComposable` 精确定位。
+  只有 `DebugCaptionButton`（1.19.1 的 `\u063A`）在标题栏里是唯一调用，所以标题栏入口挂它。
+- **ComposableSingletons 类里的插入可能不渲染**：`ȅ` 的缓存 lambda 内 afterComposable 注册成功但内容不进组合，
+  这是本次排查花时间最多的坑。
+- `appendContent` 只能包装**非 composable** 的 `Function1` DSL 参数，标题栏几层都是 composable lambda，用不了。

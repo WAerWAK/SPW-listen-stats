@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.spwmods.waerwak.listenstats"
-version = "1.4.10"
+version = "1.4.11"
 
 val pluginId = "com.spwmods.waerwak.listenstats"
 val pluginVersion = version.toString()
@@ -54,6 +54,10 @@ tasks.withType<JavaCompile>().configureEach {
 
 dependencies {
     // 宿主已提供：Kotlin stdlib、Compose、Workshop API、PF4J 运行时
+    // 宿主 1.19.1 把 META-INF/runtime.kotlin_module 清空了（24 字节空壳），
+    // 导致 Kotlin 编译器看不到 androidx.compose.runtime 的顶层函数（remember / mutableStateOf…）。
+    // 这里补一份正确的包映射，放在宿主 jar 之前优先读取。
+    compileOnly(files(file("libs/runtime-module-patch.jar")))
     compileOnly(files(hostStubJar))
     // @Extension 注解（编译期）+ 宿主运行时自带
     compileOnly("org.pf4j:pf4j:3.14.1")
@@ -74,6 +78,8 @@ tasks.register<JavaExec>("runDataTests") {
     classpath = sourceSets["test"].runtimeClasspath
     mainClass.set("com.spwmods.waerwak.listenstats.test.DataRegressionTestKt")
     workingDir = layout.buildDirectory.dir("test-run").get().asFile
+    // clean 之后这个目录不存在，JavaExec 会以 "目录名称无效" 启动失败
+    doFirst { workingDir.mkdirs() }
     // 宿主类是 class file 69（JDK 25）编译的：运行时必须用 JDK 25，否则加载 MediaItem 会失败
     val jdk25Home = providers.gradleProperty("jdk25Home").getOrElse("D:/Projects/.tools/jdk25")
     executable = "$jdk25Home/bin/java.exe"
