@@ -18,16 +18,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
@@ -39,11 +36,10 @@ import com.spwmods.waerwak.listenstats.ui.LocalSaltPalette
 import com.spwmods.waerwak.listenstats.ui.SaltDesign
 import com.spwmods.waerwak.listenstats.ui.UiStateStore
 import com.spwmods.waerwak.listenstats.ui.HostFont
-import com.xuncorp.spw.workshop.api.WorkshopApi
 
 @Composable
 internal fun InfoTab(
-    tick: Int,
+    tick: Long,
     onEditThreshold: () -> Unit,
     onEditRetention: () -> Unit,
     onEditFontSize: () -> Unit
@@ -202,6 +198,8 @@ internal fun InfoTab(
                 // ------------------------------------------------ 诊断（运行状态）
                 SaltGroup {
                     GroupHeader("诊断")
+                    ItemRow("窗口样式", HostAppearance.lastStyleName)
+                    RowDivider()
                     ItemRow(
                         "背景",
                         if (bridgeOn) {
@@ -482,6 +480,7 @@ internal fun buildDiagnostics(
     sb.append("存储: ").append(StatsStore.storageSummary()).append('\n')
     sb.append("计数门槛: ").append(CountRule.describe()).append('\n')
     sb.append("明细保留: ").append(StorageRule.describe()).append('\n')
+    sb.append("窗口样式: ").append(HostAppearance.lastStyleName).append('\n')
     sb.append("背景: ")
     if (bridgeOn) {
         sb.append(if (HostAppearance.isMaterialStyle()) "跟随窗口材质（透明）" else "经典纯色")

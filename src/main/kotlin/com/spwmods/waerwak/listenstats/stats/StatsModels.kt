@@ -152,5 +152,11 @@ internal object StatsThresholds {
             return CountRule.ignoreMinSeconds.toLong() * 1000L
         }
 
-    fun countThreshold(durationMs: Long): Long = CountRule.thresholdMs(durationMs)
+    fun countThreshold(durationMs: Long): Long {
+        val rule = CountRule.thresholdMs(durationMs)
+        val ignore = IGNORE_MIN_MS
+        // 门槛必须不低于「忽略阈值」。否则介于两者之间的播放会被静默丢弃：
+        // 没到门槛（不计数），又低于忽略阈值（连"跳过"都不记），规则自相矛盾
+        return if (rule < ignore) ignore else rule
+    }
 }

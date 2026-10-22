@@ -5,7 +5,7 @@
 <h1 align="center">听歌统计 · Salt Player for Windows 插件</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC-v1.4.6-8B5CF6?labelColor=1F2937" alt="最新版本">
+  <img src="https://img.shields.io/badge/%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC-v1.4.10-8B5CF6?labelColor=1F2937" alt="最新版本">
   <img src="https://img.shields.io/badge/SPW-1.19.0-3B82F6?labelColor=1F2937" alt="SPW 版本">
   <img src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows-0EA5E9?labelColor=1F2937" alt="平台">
   <img src="https://img.shields.io/badge/license-Apache--2.0-22C55E?labelColor=1F2937" alt="许可证">
@@ -158,7 +158,7 @@ com.spwmods.waerwak.listenstats
 一键部署（开发用，会重启 SPW）：
 
 ```powershell
-pwsh -File tools/deploy.ps1 -SpmodPath build/libs/plugin-com.spwmods.waerwak.listenstats-1.4.1.spmod
+pwsh -File tools/deploy.ps1 -SpmodPath build/libs/plugin-com.spwmods.waerwak.listenstats-1.4.10.spmod
 ```
 
 ---
@@ -170,7 +170,16 @@ src/main/kotlin/com/spwmods/waerwak/listenstats/
 ├── ListenStatsPlugin.kt        插件入口（启动/停止、快捷键、注入装配）
 ├── ListenStatsExtension.kt     播放扩展点（转发信号给采集层）
 ├── HostProbe.kt                宿主环境探测、数据目录定位、启动日志
-├── OverlayInjection.kt         Hook 注入 + 全部面板 UI
+├── OverlayInjection.kt         Hook 注入、安装/卸载入口、配置页动作
+├── OverlayShell.kt             面板外壳（顶栏 / Tab 栏 / 浮钮 / 弹层栈 / Esc 层级）
+├── Common.kt                   通用组件（分组卡片 / 列表行 / 分页 / 滚轮区 / 格式化）
+├── Dialogs.kt                  弹窗（门槛 / 保留天数 / 字体 / 曲目·分组·单日详情）
+├── OverviewTab.kt              概览页（KPI / 最近播放 / Top 10 / 听歌小结）
+├── RankingTab.kt               排行页（搜索 / 排序 / 范围）
+├── CalendarTab.kt              活跃度页（年份选择 / 热力图 / 时长分布）
+├── Heatmap.kt                  热力图渲染与色阶
+├── DurationChart.kt            时长分布图（柱 / 折线 / 曲线）
+├── InfoTab.kt                  信息页（环境 / 权限 / 诊断 / 门槛设置）
 ├── stats/
 │   ├── SessionTracker.kt       一遍播放状态机（次数/时长/跳过）
 │   ├── StatsStore.kt           存储（按月聚合 + 明细 + 字典）与查询

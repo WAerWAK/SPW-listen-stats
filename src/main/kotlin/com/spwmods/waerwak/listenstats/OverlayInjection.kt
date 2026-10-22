@@ -228,7 +228,31 @@ object OverlayInjection {
             lastError = null
             "已注册：窗口右下角会出现一个「只露一点」的圆"
         } catch (t: Throwable) {
+            // 回滚：handle 已赋值时如果只记录错误，installed() 会一直是 true，
+            // 之后 install() 直接返回「已注册」，导航感知 / 标题栏按钮再也补装不上
             lastError = "${t.javaClass.simpleName}: ${t.message}"
+            try {
+                handle?.unhook()
+            } catch (e: Throwable) {
+                // 忽略
+            }
+            handle = null
+            try {
+                materialHandle?.unhook()
+            } catch (e: Throwable) {
+                // 忽略
+            }
+            materialHandle = null
+            try {
+                com.spwmods.waerwak.listenstats.ui.NavigationHook.uninstall()
+            } catch (e: Throwable) {
+                // 忽略
+            }
+            try {
+                com.spwmods.waerwak.listenstats.ui.TitlebarButton.uninstall()
+            } catch (e: Throwable) {
+                // 忽略
+            }
             "失败：${t.javaClass.simpleName} — ${t.message ?: ""}"
         }
     }
@@ -283,46 +307,6 @@ object StatsActions {
         toast(StatsStore.reset(), true)
     }
 
-
-    @JvmStatic
-    @JvmName("exportCsv")
-    fun exportCsv() {
-        val dir = StatsStore.dataDirOrNull()
-        if (dir == null) {
-            toast("没有数据目录", false)
-            return
-        }
-        val tracks = StatsStore.allTracks()
-        if (tracks.isEmpty()) {
-            toast("没有数据可导出", false)
-            return
-        }
-        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(Date())
-        val file = java.io.File(dir, "listen-stats-" + stamp + ".csv")
-        val sb = StringBuilder(4096)
-        sb.append('\uFEFF')
-        sb.append("曲目,艺术家,专辑,次数,累计分钟,跳过次数,首次播放,最近播放,路径\n")
-        var i = 0
-        while (i < tracks.size) {
-            val t = tracks[i]
-            sb.append(csv(t.title)).append(',')
-            sb.append(csv(t.artist)).append(',')
-            sb.append(csv(t.album)).append(',')
-            sb.append(t.count).append(',')
-            sb.append(t.listenedMs / 60_000L).append(',')
-            sb.append(t.skipCount).append(',')
-            sb.append(timeOf(t.firstPlayed)).append(',')
-            sb.append(timeOf(t.lastPlayed)).append(',')
-            sb.append(csv(if (t.path.isBlank()) t.id else t.path)).append('\n')
-            i++
-        }
-        try {
-            java.nio.file.Files.write(file.toPath(), sb.toString().toByteArray(Charsets.UTF_8))
-            toast("已导出 CSV：" + file.absolutePath, true)
-        } catch (t: Throwable) {
-            toast("导出失败：" + t.message, false)
-        }
-    }
 
     /** 弹出对话框：备份全部数据 */
     @JvmStatic

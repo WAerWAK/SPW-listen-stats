@@ -60,10 +60,19 @@ object HostAppearance {
      *
      * 实测 SPW 1.19.0：None / WindowsAcrylic / WindowsMica / WindowsMicaAlt / MacOSVibrancy
      */
-    fun windowStyleName(): String = try {
-        AppConfig.spwWindowStyle.name
-    } catch (t: Throwable) {
-        "None"
+    /** 最近一次读到的窗口样式：诊断显示与面板背景判断共用，避免重复读配置 */
+    @Volatile
+    var lastStyleName: String = "None"
+        private set
+
+    fun windowStyleName(): String {
+        val name = try {
+            AppConfig.spwWindowStyle.name
+        } catch (t: Throwable) {
+            "None"
+        }
+        lastStyleName = name
+        return name
     }
 
     /** 是否为 DWM 材质样式（亚克力 / 云母 / 云母 Alt），用于背景透明透出 */

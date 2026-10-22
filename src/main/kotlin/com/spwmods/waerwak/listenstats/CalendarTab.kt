@@ -39,8 +39,9 @@ import java.time.LocalDate
 
 @Composable
 internal fun CalendarTab(tick: Int, onSelectDay: (String) -> Unit) {
-    // 近一年：53 周 × 7 天，列首周一、列尾周日
-    val days = remember(tick) { StatsStore.recentDays(400) }
+    // 全量按天数据：热力图的年份视图 / 时长分布的自定义区间都按日历查值，
+    // 用「最近 N 天」会让更早的日期静默变成「无收听」（显示范围外还会漏年份）
+    val days = remember(tick) { StatsStore.allDays() }
     val map = HashMap<String, DayAgg>()
     var i = 0
     while (i < days.size) {

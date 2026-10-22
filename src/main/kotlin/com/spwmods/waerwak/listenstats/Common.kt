@@ -16,12 +16,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,8 +35,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -114,10 +115,18 @@ internal fun SaltGroup(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val p = LocalSaltPalette.current
+    // 分组卡片描边：宿主 8 种外观组合都有 1px 边框，颜色由调色板按样式分档
+    val border = if (p.cardBorder.alpha > 0f) {
+        BorderStroke(1.dp, SolidColor(p.cardBorder))
+    } else {
+        null
+    }
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = SaltDesign.shapeLarge,
-        color = LocalSaltPalette.current.subBackground
+        color = p.subBackground,
+        border = border
     ) {
         Column(
             Modifier.padding(horizontal = SaltDesign.padding, vertical = SaltDesign.subPadding),
@@ -136,27 +145,16 @@ internal fun RowDivider() {
 // ---------------------------------------------------------------- Tab: 排行（歌曲 / 专辑 / 艺术家 合并）
 
 
-/** 可滚动区域（宿主裁掉了 verticalScroll / LazyColumn，这里用滚轮 + 拖拽 + 偏移自实现）
+/** 可滚动区域（宿主裁掉了 verticalScroll / LazyColumn，这里用滚轮 + 偏移自实现）
  *  [resetKey] 变化时重置滚动位置（每个 Tab 各自独立） */
 @Composable
 internal fun ScrollArea(
     resetKey: Any,
-    barRightExtra: androidx.compose.ui.unit.Dp = 0.dp,
     content: @Composable () -> Unit
 ) {
     var viewportH by remember { mutableStateOf(0) }
     var contentH by remember { mutableStateOf(0) }
     var offsetY by remember(resetKey) { mutableStateOf(0f) }
-    val density = LocalDensity.current
-    val rawMax = (contentH - viewportH).coerceAtLeast(0).toFloat()
-    // 差值很小时（不到 60px）不开启滚动：宁可底部少显示一点，也不让顶部被裁
-    val maxOffset = if (rawMax < 60f) 0f else rawMax
-    val effOffset = if (offsetY > maxOffset) maxOffset else if (offsetY < 0f) 0f else offsetY
-    val step = if (viewportH > 0) (viewportH / 4f).coerceAtLeast(60f) else 60f
-    var scrollEvents by remember(resetKey) { mutableStateOf(0) }
-    val p = LocalSaltPalette.current
-    // 滚动条隐藏（用户反馈无滚动条观感更好）
-    val barColor = Color.Transparent
 
     Surface(Modifier.fillMaxSize(), color = Color.Transparent) {
         Box(
@@ -165,14 +163,12 @@ internal fun ScrollArea(
                     viewportH = it.size.height
                 }
                 .onPointerEvent(PointerEventType.Scroll) { event ->
-                    scrollEvents = scrollEvents + 1
                     // 注意：onPointerEvent 的回调会被 pointerInput 冻结在首次组合，
                     // 所以这里必须从 State 实时读取，不能用组合期的局部变量
                     val vh = viewportH
-                    val ch = contentH
-                    val max = (ch - vh).coerceAtLeast(0).toFloat()
+                    val max = scrollMax(viewportH, contentH)
                     if (max > 0f) {
-                        val stepNow = (vh / 4f).coerceAtLeast(60f)
+                        val stepNow = if (vh > 0) (vh / 4f).coerceAtLeast(60f) else 60f
                         val dy = event.changes.firstOrNull()?.scrollDelta?.y ?: 0f
                         offsetY = (offsetY + dy * stepNow).coerceIn(0f, max)
                     }
@@ -191,9 +187,7 @@ internal fun ScrollArea(
                         }
                     }
                     .graphicsLayer {
-                        val vh = viewportH
-                        val ch = contentH
-                        val max = (ch - vh).coerceAtLeast(0).toFloat()
+                        val max = scrollMax(viewportH, contentH)
                         val off = if (offsetY > max) max else if (offsetY < 0f) 0f else offsetY
                         translationY = -off
                     }
@@ -204,31 +198,18 @@ internal fun ScrollArea(
                     content()
                 }
             }
-            // 滚动条 + 顶/底渐变：全部在绘制阶段按 State 实时计算，避免被组合期快照冻结
-            Box(
-                Modifier.fillMaxSize().drawBehind {
-                    val vh = viewportH.toFloat()
-                    val ch = contentH.toFloat()
-                    val max = (ch - vh).coerceAtLeast(0f)
-                    if (max > 0f && ch > 0f) {
-                        val off = if (offsetY > max) max else if (offsetY < 0f) 0f else offsetY
-                        val barW = 8.dp.toPx()
-                        val barH = (size.height * (vh / ch)).coerceAtLeast(32.dp.toPx())
-                        val barY = (off / max) * (size.height - barH)
-                        // 内容居中时向外偏移，使滚动条始终贴近窗口右边缘
-                        val extra = barRightExtra.toPx()
-                        drawRoundRect(
-                            color = barColor,
-                            topLeft = Offset(size.width + extra - barW - 4.dp.toPx(), barY),
-                            size = Size(barW, barH),
-                            cornerRadius = CornerRadius(barW / 2f)
-                        )
-
-                    }
-                }
-            )
         }
     }
+}
+
+/**
+ * 可滚动的最大偏移
+ *
+ * 差值不到 60px 时视为不可滚：宁可底部少显示一点，也不让顶部被裁。
+ */
+private fun scrollMax(viewportH: Int, contentH: Int): Float {
+    val raw = (contentH - viewportH).coerceAtLeast(0).toFloat()
+    return if (raw < 60f) 0f else raw
 }
 
 
@@ -479,6 +460,14 @@ internal fun Pager(
     onPageSize: ((Int) -> Unit)? = null
 ) {
     var sizeOpen by remember { mutableStateOf(false) }
+    // 页码越界（搜索结果变短 / 每页条数变大）会让列表空掉却显示「3 / 1」，这里统一夹取并纠偏
+    val safePage = if (pageCount <= 0) 0
+    else if (page < 0) 0
+    else if (page > pageCount - 1) pageCount - 1
+    else page
+    LaunchedEffect(safePage) {
+        if (page != safePage) onPage(safePage)
+    }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(
             "共 " + total + " 条",
@@ -535,15 +524,15 @@ internal fun Pager(
             }
         }
         Spacer(Modifier.weight(1f))
-        SmallButton("上一页", page > 0) { onPage(page - 1) }
+        SmallButton("上一页", safePage > 0) { onPage(safePage - 1) }
         Spacer(Modifier.width(8.dp))
         Text(
-            (page + 1).toString() + " / " + pageCount,
+            (safePage + 1).toString() + " / " + pageCount,
             fontSize = SaltDesign.fontSizeSub,
             color = LocalSaltPalette.current.subText
         )
         Spacer(Modifier.width(8.dp))
-        SmallButton("下一页", page < pageCount - 1) { onPage(page + 1) }
+        SmallButton("下一页", safePage < pageCount - 1) { onPage(safePage + 1) }
     }
 }
 

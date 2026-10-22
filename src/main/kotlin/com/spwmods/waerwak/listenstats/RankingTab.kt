@@ -36,8 +36,6 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import com.spwmods.waerwak.listenstats.stats.StatsStore
 import com.spwmods.waerwak.listenstats.ui.LocalSaltPalette
@@ -45,7 +43,7 @@ import com.spwmods.waerwak.listenstats.ui.SaltDesign
 import java.time.LocalDate
 
 @Composable
-internal fun RankingTab(tick: Int) {
+internal fun RankingTab(tick: Long) {
     var kind by remember { mutableStateOf(0) }
     // 排序键：0=时长 1=次数 2=跳过 3=上次播放 4=曲目名；默认时长降序
     var sortKey by remember { mutableStateOf(0) }
@@ -62,7 +60,13 @@ internal fun RankingTab(tick: Int) {
     var query by remember { mutableStateOf("") }
     LaunchedEffect(rawQuery) {
         kotlinx.coroutines.delay(150L)
-        query = rawQuery
+        if (query != rawQuery) {
+            query = rawQuery
+            // 搜索结果变短时停留在旧页码会显示空列表 + 「4 / 1」这种矛盾状态
+            songsPage = 0
+            albumsPage = 0
+            artistsPage = 0
+        }
     }
     val today = LocalDate.now()
     val sinceDate: String? = when (range) {
@@ -111,15 +115,21 @@ internal fun RankingTab(tick: Int) {
         when (kind) {
             0 -> TrackListView(
                 songsPage, tick, sortKey, asc, sinceDate, query, pageSize,
-                { songsPage = it }, { pageSize = it }, onSort
+                { songsPage = it },
+                { pageSize = it; songsPage = 0 },
+                onSort
             )
             1 -> AggregateListView(
                 true, albumsPage, tick, sortKey, asc, sinceDate, query, pageSize,
-                { albumsPage = it }, { pageSize = it }, onSort
+                { albumsPage = it },
+                { pageSize = it; albumsPage = 0 },
+                onSort
             )
             else -> AggregateListView(
                 false, artistsPage, tick, sortKey, asc, sinceDate, query, pageSize,
-                { artistsPage = it }, { pageSize = it }, onSort
+                { artistsPage = it },
+                { pageSize = it; artistsPage = 0 },
+                onSort
             )
         }
     }
@@ -219,7 +229,7 @@ internal fun RangeTab(
 @Composable
 internal fun TrackListView(
     page: Int,
-    tick: Int,
+    tick: Long,
     sortKey: Int,
     asc: Boolean,
     sinceDate: String?,
@@ -268,7 +278,7 @@ internal fun TrackListView(
 internal fun AggregateListView(
     byAlbum: Boolean,
     page: Int,
-    tick: Int,
+    tick: Long,
     sortKey: Int,
     asc: Boolean,
     sinceDate: String?,
@@ -307,8 +317,10 @@ internal fun AggregateListView(
                     trackKey = "",
                     onClick = { },
                     onRowClick = {
+                        // 带上当前榜单范围：详情弹窗按同一范围聚合，数字才和列表行一致
                         GroupDetailState.open.value = (if (byAlbum) "album" else "artist") +
-                            "|" + row.name + "|" + row.owner
+                            "\u0001" + row.name + "\u0001" + row.owner +
+                            "\u0001" + (sinceDate ?: "")
                     }
                 )
                 i++

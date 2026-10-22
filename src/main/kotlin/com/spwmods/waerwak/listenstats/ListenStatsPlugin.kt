@@ -49,7 +49,10 @@ class ListenStatsPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext)
             System.err.println("[listen-stats] 注销快捷键失败: ${t.message}")
         }
         hotkey = null
+        // 结算当前这一遍，然后把写线程排空并释放（重新启用插件时会重建）
         SessionTracker.flush()
+        SessionTracker.shutdown()
+        com.spwmods.waerwak.listenstats.stats.StatsStore.shutdown()
         OverlayInjection.uninstall()
     }
 

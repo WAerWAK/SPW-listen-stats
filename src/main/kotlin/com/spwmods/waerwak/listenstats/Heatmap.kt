@@ -14,9 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Surface
@@ -32,10 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -222,8 +217,9 @@ internal fun ActivityHeatmap(
                     // 与我们的浅色文本撞成黑底黑字
                     containerColor = p.dialogSurface
                 ) {
+                    // 列全部有数据的年份（DropdownMenu 自身可滚动），不再静默截断到 8 项
                     var oi = 0
-                    while (oi < years.size && oi < 8) {
+                    while (oi < years.size) {
                         val opt = years[oi]
                         DropdownMenuItem(
                             text = {

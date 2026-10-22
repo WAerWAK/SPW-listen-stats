@@ -85,7 +85,10 @@ object CoverCache {
     @Synchronized
     fun cached(id: String): ImageBitmap? {
         if (id.isBlank()) return null
-        return bitmaps[id]
+        val hit = bitmaps[id] ?: return null
+        // 刷新 LRU 顺序：order 是 accessOrder=true 的 LinkedHashMap，重新 put 会移到队尾
+        order[id] = true
+        return hit
     }
 
     @Synchronized
@@ -106,16 +109,25 @@ object CoverCache {
         generation.value = generation.value + 1
     }
 
+    /** 诊断文本缓存：信息页每 1.5 秒重组一次，不能每次都去 listFiles */
+    private var statsCachedAt = 0L
+    private var statsCache = ""
+
     /** 信息页诊断文本 */
     @Synchronized
     fun statsText(): String {
+        val now = System.currentTimeMillis()
+        if (statsCache.isNotEmpty() && now - statsCachedAt < 10_000L) return statsCache
         val diskCount = try {
             diskDir()?.listFiles()?.size ?: 0
         } catch (t: Throwable) {
             0
         }
-        return "内存 " + bitmaps.size.toString() + " 张 / 磁盘 " + diskCount.toString() +
+        val text = "内存 " + bitmaps.size.toString() + " 张 / 磁盘 " + diskCount.toString() +
             " 张 / 失败 " + failures.toString()
+        statsCache = text
+        statsCachedAt = now
+        return text
     }
 
     /**
@@ -252,19 +264,27 @@ object CoverCache {
     private fun readDisk(id: String): ImageBitmap? {
         val file = diskFile(id) ?: return null
         if (!file.isFile) return null
-        return try {
-            val image = org.jetbrains.skia.Image.makeFromEncoded(file.readBytes())
+        var image: org.jetbrains.skia.Image? = null
+        try {
+            image = org.jetbrains.skia.Image.makeFromEncoded(file.readBytes())
             val bitmap = image.toComposeImageBitmap()
             // 刷新访问时间，供容量淘汰时优先保留常用封面
             file.setLastModified(System.currentTimeMillis())
-            bitmap
+            return bitmap
         } catch (t: Throwable) {
             try {
                 file.delete()
             } catch (e: Throwable) {
                 // 删不掉也无所谓
             }
-            null
+            return null
+        } finally {
+            // Skia 的 Image 是本地资源，必须显式释放（与 decodeThumbnail 保持一致）
+            try {
+                image?.close()
+            } catch (t: Throwable) {
+                // 忽略
+            }
         }
     }
 

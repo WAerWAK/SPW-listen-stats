@@ -25,7 +25,12 @@ internal object TrackDict {
     private val pending = ArrayList<String>()
     private var file: File? = null
 
-    /** 稳定的 8 位 hex key（同一首曲目恒定，跨启动一致） */
+    /**
+     * 稳定的 hex key（同一首曲目恒定，跨启动一致）
+     *
+     * 注意：这里是 hashCode 的十六进制形式，**不补前导零**（长度 1–8）。
+     * 补零会改变已有数据的 key、让旧聚合记录对不上曲目，所以保持现状。
+     */
     fun keyOf(id: String, path: String): String {
         var src = id
         if (src.isBlank()) src = path
@@ -84,12 +89,36 @@ internal object TrackDict {
     ) {
         val existing = map[key]
         if (existing != null) {
-            if (existing.id.isBlank() && id.isNotBlank()) existing.id = id
-            if (existing.title.isBlank() && title.isNotBlank()) existing.title = title
-            if (existing.artist.isBlank() && artist.isNotBlank()) existing.artist = artist
-            if (existing.album.isBlank() && album.isNotBlank()) existing.album = album
-            if (existing.albumArtist.isBlank() && albumArtist.isNotBlank()) existing.albumArtist = albumArtist
-            if (existing.dur <= 0L && dur > 0L) existing.dur = dur
+            var changed = false
+            if (existing.id.isBlank() && id.isNotBlank()) {
+                existing.id = id
+                changed = true
+            }
+            if (existing.title.isBlank() && title.isNotBlank()) {
+                existing.title = title
+                changed = true
+            }
+            if (existing.artist.isBlank() && artist.isNotBlank()) {
+                existing.artist = artist
+                changed = true
+            }
+            if (existing.album.isBlank() && album.isNotBlank()) {
+                existing.album = album
+                changed = true
+            }
+            if (existing.albumArtist.isBlank() && albumArtist.isNotBlank()) {
+                existing.albumArtist = albumArtist
+                changed = true
+            }
+            if (existing.dur <= 0L && dur > 0L) {
+                existing.dur = dur
+                changed = true
+            }
+            // 补全过的字段要重新落盘，否则重启后又变空（旧数据 / 迁移场景）
+            if (changed) {
+                pending.add(lineOf(key, existing))
+                if (pending.size >= 32) flush()
+            }
             return
         }
         val entry = Entry()
@@ -117,7 +146,6 @@ internal object TrackDict {
         val target = file ?: return
         if (pending.isEmpty()) return
         val lines = ArrayList<String>(pending)
-        pending.clear()
         try {
             val parent = target.parentFile
             if (parent != null) parent.mkdirs()
@@ -128,8 +156,12 @@ internal object TrackDict {
                 StandardOpenOption.CREATE,
                 StandardOpenOption.APPEND
             )
+            // 写成功才清队列：失败时保留这几行，下次 flush 重试
+            pending.clear()
         } catch (t: Throwable) {
             System.err.println("[listen-stats] 写入曲目字典失败: " + t.message)
+            // 避免一直失败时无限堆积
+            if (pending.size > 4096) pending.clear()
         }
     }
 

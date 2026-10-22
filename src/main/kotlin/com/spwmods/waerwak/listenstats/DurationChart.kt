@@ -4,7 +4,6 @@ package com.spwmods.waerwak.listenstats
 
 import com.xuncorp.spw.workshop.api.UnstableSpwWorkshopApi
 import androidx.compose.ui.ExperimentalComposeUiApi
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,9 +31,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
@@ -95,7 +92,15 @@ internal fun DurationChart(
         if (v > rawMax) rawMax = v
         i++
     }
-    val axisMax = niceAxisMax(rawMax)
+    // 轴最大值：次数模式取 4 的倍数，五个刻度才都是整数（否则会出现 0,0,1,1,2 这种重复刻度）；
+    // 时长模式至少给到 1 分钟（否则数据不足 1 分钟时，四个刻度四舍五入后全是 0）
+    val axisMax = if (byTime) {
+        val v = niceAxisMax(rawMax)
+        if (v < 60_000f) 60_000f else v
+    } else {
+        val v = niceAxisMax(rawMax)
+        if (v < 4f) 4f else Math.ceil(v / 4.0).toFloat() * 4f
+    }
     val average = if (buckets.size > 0) (total / buckets.size).toFloat() else 0f
 
     // 任何改变图表内容的操作（范围 / 次数-时长 / 柱线曲线）都重放一次「从下往上升起」：
@@ -110,8 +115,6 @@ internal fun DurationChart(
     }
 
     var hovered by remember(from, to) { mutableStateOf(-1) }
-    var hoverLeftPx by remember { mutableStateOf(0f) }
-    var hoverBarW by remember { mutableStateOf(0f) }
     var plotPx by remember { mutableStateOf(0f) }
     // 鼠标在图表区内的位置（用于跟随式浮窗）
     var mouseX by remember { mutableStateOf(-1f) }
@@ -316,16 +319,8 @@ internal fun DurationChart(
                                     Modifier
                                         .weight(1f)
                                         .height(170.dp)
-                                        .onGloballyPositioned { coords ->
-                                            if (hovered == index) {
-                                                val pos = coords.localToRoot(androidx.compose.ui.geometry.Offset.Zero)
-                                                hoverLeftPx = pos.x
-                                                hoverBarW = coords.size.width.toFloat()
-                                            }
-                                        }
                                         .onPointerEvent(PointerEventType.Enter) {
                                             hovered = index
-                                            hoverLeftPx = -1f
                                         }
                                         .onPointerEvent(PointerEventType.Exit) {
                                             if (hovered == index) hovered = -1
@@ -399,16 +394,8 @@ internal fun DurationChart(
                                     Modifier
                                         .weight(1f)
                                         .height(170.dp)
-                                        .onGloballyPositioned { coords ->
-                                            if (hovered == index) {
-                                                val pos = coords.localToRoot(androidx.compose.ui.geometry.Offset.Zero)
-                                                hoverLeftPx = pos.x
-                                                hoverBarW = coords.size.width.toFloat()
-                                            }
-                                        }
                                         .onPointerEvent(PointerEventType.Enter) {
                                             hovered = index
-                                            hoverLeftPx = -1f
                                         }
                                         .onPointerEvent(PointerEventType.Exit) {
                                             if (hovered == index) hovered = -1
@@ -664,7 +651,7 @@ internal fun formatAxisNumber(value: Double, step: Double): String {
 
 /** Y 轴刻度文字（单位由标题承担，这里只给数字） */
 internal fun axisTickLabel(value: Float, byTime: Boolean, axisMax: Float, step: Float): String {
-    if (!byTime) return value.toInt().toString()
+    if (!byTime) return Math.round(value).toString()
     if (value <= 0f) return "0"
     return formatAxisNumber(axisValueMs(value, axisMax), axisValueMs(step, axisMax))
 }

@@ -64,8 +64,23 @@ object SessionTracker {
         wallClock = { System.currentTimeMillis() }
     }
 
-    private val io = Executors.newSingleThreadExecutor { runnable ->
+    /** 时长查询线程（插件停用后会释放，重新启用时重建） */
+    @Volatile
+    private var io = newIo()
+
+    private fun newIo() = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "listen-stats-duration").apply { isDaemon = true }
+    }
+
+    /** 插件停用时调用：释放线程，避免重载插件累积 */
+    @Synchronized
+    internal fun shutdown() {
+        try {
+            io.shutdown()
+        } catch (t: Throwable) {
+            // 忽略
+        }
+        io = newIo()
     }
 
     // ---------------------------------------------------------------- 回调
@@ -93,9 +108,17 @@ object SessionTracker {
         if (item.id.isNotBlank()) requestDuration(key, item.id)
     }
 
-    @Synchronized
     fun onPosition(position: Long) {
-        val current = session ?: return
+        val snap = updatePosition(position) ?: return
+        // 崩溃保护的落盘放到锁外：播放回调每秒好多次，不能让它等磁盘
+        // （杀软扫描 / 慢盘时会把宿主播放卡住）
+        LiveSessionStore.maybeSave(snap)
+    }
+
+    /** 更新一遍播放的进度，返回需要落盘的崩溃保护快照 */
+    @Synchronized
+    private fun updatePosition(position: Long): LiveSessionStore.Snapshot? {
+        val current = session ?: return null
         val now = nanoClock()
         val last = current.lastPosition
         val lastWall = current.lastWallNanos
@@ -103,7 +126,7 @@ object SessionTracker {
         if (last < 0L) {
             current.lastPosition = position
             current.lastWallNanos = now
-            return
+            return null
         }
 
         if (position < last - BACK_JUMP_TOLERANCE_MS) {
@@ -114,7 +137,7 @@ object SessionTracker {
             }
             current.lastPosition = position
             current.lastWallNanos = now
-            return
+            return null
         }
 
         val positionDelta = position - last
@@ -122,31 +145,29 @@ object SessionTracker {
         current.lastPosition = position
         current.lastWallNanos = now
 
-        if (!playing) return
-        if (positionDelta < 1L || positionDelta > MAX_STEP_MS) return
+        if (!playing) return null
+        if (positionDelta < 1L || positionDelta > MAX_STEP_MS) return null
 
         val effective = if (wallDelta >= 0L && wallDelta < positionDelta) wallDelta else positionDelta
-        if (effective <= 0L) return
+        if (effective <= 0L) return null
 
         current.listenedMs += effective
         if (!current.counted) {
             val threshold = StatsThresholds.countThreshold(current.durationMs)
             if (current.listenedMs >= threshold) current.counted = true
         }
-        // 定期落盘：进程被强杀时最多丢 10 秒
-        LiveSessionStore.maybeSave(
-            LiveSessionStore.Snapshot(
-                startTimeMs = current.startTimeMs,
-                id = current.meta.id,
-                path = current.meta.path,
-                title = current.meta.title,
-                artist = current.meta.artist,
-                album = current.meta.album,
-                albumArtist = current.meta.albumArtist,
-                listenedMs = current.listenedMs,
-                durationMs = current.durationMs,
-                counted = current.counted
-            )
+        // 调用方在锁外写盘（进程被强杀时最多丢 10 秒）
+        return LiveSessionStore.Snapshot(
+            startTimeMs = current.startTimeMs,
+            id = current.meta.id,
+            path = current.meta.path,
+            title = current.meta.title,
+            artist = current.meta.artist,
+            album = current.meta.album,
+            albumArtist = current.meta.albumArtist,
+            listenedMs = current.listenedMs,
+            durationMs = current.durationMs,
+            counted = current.counted
         )
     }
 

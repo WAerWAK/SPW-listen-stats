@@ -75,9 +75,19 @@ data class SaltPalette(
     val subText: Color,
     /** 次级标签色（KPI 标签等），弱于 highlight */
     val labelAccent: Color,
+    /** 面板底色（不透明兜底色）：材质模式下用于桥接层不可用时的回退 */
     val background: Color,
-    val card: Color,
     val subBackground: Color,
+    /** 分组卡片的 1px 描边（8 种组合都有，颜色按宿主实测分档） */
+    val cardBorder: Color = Color.Transparent,
+    /**
+     * 面板根是否透明
+     *
+     * true  = 材质样式（云母 / 亚克力）：根 Surface 透明，露出宿主 DWM 材质
+     * false = 经典样式，或宿主自己在材质上盖了近不透明的着色层（云母 Alt）：
+     *         根 Surface 直接用 [background] 实色
+     */
+    val transparentPanel: Boolean = false,
     val onHighlight: Color,
     val error: Color,
     val circleBackground: Color,
@@ -87,6 +97,13 @@ data class SaltPalette(
     val dialogSurface: Color
 )
 
+/*
+ * 经典（椒盐经典）样式分层：
+ *   窗口/面板底 = 深 #232323 / 浅 #F8F8F8
+ *   内容区卡片  = 深 #2A2A2A / 浅 #FBFBFB（宿主把内容区做成一张大圆角卡片）
+ *   卡片边框    = 1px 实色（深 #3B3B3B / 浅 #E8E8E8）
+ * 插件面板铺满内容区，所以根底色用窗口色、分组卡片用内容区色，才和宿主的分层一致。
+ */
 private val DarkClassic = SaltPalette(
     isDark = true,
     highlight = Color(0xFF79B5FF),
@@ -94,8 +111,9 @@ private val DarkClassic = SaltPalette(
     subText = Color(0xFFA0A3AB),
     labelAccent = Color(0xFF8FC7E8),
     background = Color(0xFF232323),
-    card = Color(0xFF2A2A2A),
-    subBackground = Color(0xFF2B2D32),
+    subBackground = Color(0xFF2A2A2A),
+    // 经典样式的 1px 淡边框：深色背景 #232323 上提亮 8% 的实色
+    cardBorder = Color(0xFF3B3B3B),
     onHighlight = Color(0xFF0E1418),
     error = Color(0xFFFF8A8A),
     circleBackground = Color(0xE6232323),
@@ -111,8 +129,9 @@ private val LightClassic = SaltPalette(
     subText = Color(0xFF777B82),
     labelAccent = Color(0xFF3A7EA6),
     background = Color(0xFFF8F8F8),
-    card = Color(0xFFFCFCFC),
-    subBackground = Color(0xFFEDEEF1),
+    subBackground = Color(0xFFFBFBFB),
+    // 经典样式的 1px 淡边框：浅色背景 #F8F8F8 上压暗 6% 的实色
+    cardBorder = Color(0xFFE8E8E8),
     onHighlight = Color(0xFFFFFFFF),
     error = Color(0xFFCF4545),
     circleBackground = Color(0xF2FFFFFF),
@@ -122,18 +141,21 @@ private val LightClassic = SaltPalette(
 )
 
 /*
- * 材质模式下，卡片/控件的半透明覆盖层要压在 DWM 材质上。
- * alpha 是按宿主截图反推的（宿主分组卡片相对面板背景的亮度增量）：
- *   - 云母：背景 #1E2237 → 卡片 #2A2F3B，增量约 +12，对应 alpha ≈ 14%
- *   - 亚克力：背景 #3C3F46 → 卡片 #4B4E54，增量约 +16，对应 alpha ≈ 25%
- * 两种材质透出的壁纸亮度不同，所以必须分开设值。
+ * 材质样式保留「透出 DWM 材质」的做法：面板根透明，卡片用半透明覆盖层压上去。
+ * alpha 全部按宿主截图反推（背景 → 宿主分组卡片）：
+ *   深色云母  #1E2237 → #2A2F3B（+12）
+ *   深色亚克力 #3C3F46 → #4B4E54（+16）
+ *   浅色云母  #F6F8FB → #FDFDFE（+7）
+ *   浅色亚克力 #BCBDC2 → #CBCDD0（+15）
+ * 宿主的分组卡片都带 1px 淡边框，材质样式统一给 cardBorder。
  */
 
 /** 深色云母：14% 中性灰覆盖 */
 private val DarkMica = DarkClassic.copy(
-    background = Color.Transparent,
-    card = Color(0xFF7C7C7C).copy(alpha = 0.14f),
+    background = Color(0xFF1E2237),
     subBackground = Color(0xFF7C7C7C).copy(alpha = 0.14f),
+    cardBorder = Color(0xFF303447),
+    transparentPanel = true,
     subText = Color(0xFFCCD0D5).copy(alpha = 0.91f),
     // 弹窗在用材质背景时保持不透明（否则文字读不清）
     dialogSurface = Color(0xFF3A3A3A)
@@ -141,37 +163,67 @@ private val DarkMica = DarkClassic.copy(
 
 /** 深色亚克力：25% 中性灰覆盖 */
 private val DarkAcrylic = DarkClassic.copy(
-    background = Color.Transparent,
-    card = Color(0xFF7C7C7C).copy(alpha = 0.25f),
+    background = Color(0xFF3C3F46),
     subBackground = Color(0xFF7C7C7C).copy(alpha = 0.25f),
+    cardBorder = Color(0xFF595C62),
+    transparentPanel = true,
     subText = Color(0xFFCCD0D5).copy(alpha = 0.91f),
     dialogSurface = Color(0xFF3A3A3A)
 )
 
-/** 浅色材质：卡片/控件 72% 不透明底（浅色下没有可反推的截图，先沿用） */
+/** 浅色云母：87% 白覆盖（宿主卡片 #FDFDFE，边框 #E3E3E4） */
 private val LightMica = LightClassic.copy(
-    background = Color.Transparent,
-    card = LightClassic.card.copy(alpha = 0.72f),
-    subBackground = LightClassic.subBackground.copy(alpha = 0.72f),
+    background = Color(0xFFF6F8FB),
+    subBackground = Color.White.copy(alpha = 0.87f),
+    cardBorder = Color(0xFFE3E3E4),
+    transparentPanel = true,
     dialogSurface = Color(0xFFF7F7F7)
 )
 
+/** 浅色亚克力：背景 #BCBDC2 → 卡片 #CBCDD0，26% 白 */
 private val LightAcrylic = LightClassic.copy(
-    background = Color.Transparent,
-    card = LightClassic.card.copy(alpha = 0.72f),
-    subBackground = LightClassic.subBackground.copy(alpha = 0.72f),
+    background = Color(0xFFBCBDC2),
+    subBackground = Color.White.copy(alpha = 0.26f),
+    cardBorder = Color(0xFFADAFB3),
+    transparentPanel = true,
+    dialogSurface = Color(0xFFF7F7F7)
+)
+
+/*
+ * 云母 Alt 和云母不是同一块材质底：宿主在 DWM 材质上又盖了一层近不透明的着色
+ * （深色 #2A2A2A → 内容区 #071026，浅色 → #E4E9F1）。
+ * 所以这里用不透明根 + 实色，否则会透出 DWM 原来的灰底，与宿主差一大截。
+ * 注意卡片是比背景「亮」（+13），不是更暗。
+ */
+
+/** 深色云母 Alt：背景 #071026 → 卡片 #141C31，6% 白；边框 #293145 */
+private val DarkMicaAlt = DarkClassic.copy(
+    background = Color(0xFF071026),
+    subBackground = Color.White.copy(alpha = 0.055f),
+    cardBorder = Color(0xFF293145),
+    transparentPanel = false,
+    subText = Color(0xFFCCD0D5).copy(alpha = 0.91f),
+    dialogSurface = Color(0xFF3A3A3A)
+)
+
+/** 浅色云母 Alt：背景 #E4E9F1 → 卡片 #F4F6FA，55% 白 */
+private val LightMicaAlt = LightClassic.copy(
+    background = Color(0xFFE4E9F1),
+    subBackground = Color.White.copy(alpha = 0.55f),
+    cardBorder = Color(0xFFD3D8E0),
+    transparentPanel = false,
     dialogSurface = Color(0xFFF7F7F7)
 )
 
 val SaltDarkPalette: SaltPalette = DarkClassic
-val SaltLightPalette: SaltPalette = LightClassic
 
 /** 按 深浅 × 是否材质 × 窗口样式（亚克力 / 云母）取配色 */
 fun saltPalette(dark: Boolean, material: Boolean, windowStyle: String = "WindowsMica"): SaltPalette {
     if (!material) return if (dark) DarkClassic else LightClassic
-    val acrylic = windowStyle == "WindowsAcrylic"
-    if (dark) return if (acrylic) DarkAcrylic else DarkMica
-    return if (acrylic) LightAcrylic else LightMica
+    if (windowStyle == "WindowsAcrylic") return if (dark) DarkAcrylic else LightAcrylic
+    // 云母 Alt 的材质底色与云母不同（浅色更暗、深色更蓝），单独一档
+    if (windowStyle == "WindowsMicaAlt") return if (dark) DarkMicaAlt else LightMicaAlt
+    return if (dark) DarkMica else LightMica
 }
 
 val LocalSaltPalette = staticCompositionLocalOf { SaltDarkPalette }

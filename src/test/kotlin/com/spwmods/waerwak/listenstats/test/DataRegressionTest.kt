@@ -9,7 +9,6 @@ import com.spwmods.waerwak.listenstats.stats.StatsThresholds
 import com.spwmods.waerwak.listenstats.stats.TrackAgg
 import com.xuncorp.spw.workshop.api.PlaybackExtensionPoint
 import java.io.File
-import java.time.LocalDate
 import java.time.ZoneId
 
 /**
@@ -464,6 +463,73 @@ fun main() {
         check(agg!!.count == 0, "未达门槛不应计数，实际 " + agg.count)
         check(agg.skipCount == 1, "应记为跳过，实际 " + agg.skipCount)
         check(agg.listenedMs > 0L, "时长仍应保留")
+    }
+
+    test("清空后继续播放，重启后曲目名不丢") {
+        val dir = freshEnv()
+        val item = track("after-reset", title = "重置后的歌")
+        SessionTracker.onTrack(item)
+        SessionTracker.onPlayingChanged(true)
+        playFor(item, 0L, 40 * SECOND)
+        SessionTracker.flush()
+        check(findTrack("after-reset")?.title == "重置后的歌", "清空前应有标题")
+
+        StatsStore.reset()
+
+        // 清空后重新听同一首：内存字典已清，必须重新写 tracks.jsonl
+        SessionTracker.onTrack(item)
+        SessionTracker.onPlayingChanged(true)
+        playFor(item, 0L, 40 * SECOND)
+        SessionTracker.flush()
+
+        // 模拟重启：清内存后从磁盘重建
+        StatsStore.resetForTesting(dir)
+        StatsStore.dataDirOrNull()
+        val again = findTrack("after-reset")
+        check(again != null, "重启后应能读到曲目")
+        check(again!!.title == "重置后的歌", "重启后标题不应丢失（实际：\"" + again.title + "\"）")
+    }
+
+    test("恢复失败时回滚原数据") {
+        val dir = freshEnv()
+        val item = track("keep")
+        SessionTracker.onTrack(item)
+        SessionTracker.onPlayingChanged(true)
+        playFor(item, 0L, 40 * SECOND)
+        SessionTracker.flush()
+        // record 是异步落盘的，等写队列把字典刷出去（restoreFrom 内部也会 drain）
+        Thread.sleep(400L)
+        check(File(dir, "tracks.jsonl").isFile, "应有字典文件")
+
+        // 非 zip 文件：解压必然失败
+        val bad = File(dir, "bad.zip")
+        bad.writeText("not a zip", Charsets.UTF_8)
+        val msg = StatsStore.restoreFrom(bad)
+        check(msg.contains("失败") || msg.contains("未恢复"), "应报告失败：" + msg)
+
+        // 原数据必须回到原位，而不是只剩一堆 .bak
+        check(File(dir, "tracks.jsonl").isFile, "字典文件应被回滚")
+        check(File(dir, "daily").isDirectory, "按天聚合目录应被回滚")
+        val again = findTrack("keep")
+        check(again != null, "内存应能重新加载原数据")
+        check(again!!.count == 1, "原数据次数应保持，实际 " + again.count)
+    }
+
+    test("分页页码越界时不崩溃") {
+        val dir = freshEnv()
+        var i = 0
+        while (i < 25) {
+            val item = track("p" + i)
+            SessionTracker.onTrack(item)
+            SessionTracker.onPlayingChanged(true)
+            playFor(item, 0L, 40 * SECOND)
+            SessionTracker.flush()
+            i++
+        }
+        check(dir.isDirectory, "数据目录应存在")
+        val page = StatsStore.trackPageRange(99, 10, 0, false, "", null)
+        check(page.total == 25, "总数应为 25，实际 " + page.total)
+        check(page.items.isEmpty(), "越界页应返回空列表而不是崩溃")
     }
 
     println()

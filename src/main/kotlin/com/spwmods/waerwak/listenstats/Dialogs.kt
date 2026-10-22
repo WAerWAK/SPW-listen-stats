@@ -73,10 +73,10 @@ internal fun ThresholdEditor(onDismiss: () -> Unit) {
                 StepperRow(
                     label = "曲目百分比",
                     value = pct.toString() + " %",
-                    canMinus = pct > 0,
+                    canMinus = pct > 1,
                     canPlus = pct < 100,
-                    onMinus = { pct = pct - 5 },
-                    onPlus = { pct = pct + 5 }
+                    onMinus = { pct = if (pct - 5 < 1) 1 else pct - 5 },
+                    onPlus = { pct = if (pct + 5 > 100) 100 else pct + 5 }
                 )
                 Spacer(Modifier.height(6.dp))
                 StepperRow(
@@ -148,7 +148,7 @@ internal object TrackDetailState {
 
 /** 分组详情弹窗的打开状态（专辑 / 艺术家） */
 internal object GroupDetailState {
-    /** 非空表示打开；内容为 "album|name|owner" 或 "artist|name|" */
+    /** 非空表示打开；字段用 \u0001 分隔：类型 / 名称 / owner / sinceDate（名称里可能含 |） */
     val open = mutableStateOf("")
 }
 
@@ -157,11 +157,13 @@ internal object GroupDetailState {
 @Composable
 internal fun GroupDetailDialog(payload: String, onDismiss: () -> Unit) {
     val p = LocalSaltPalette.current
-    val parts = payload.split('|')
-    val byAlbum = parts.size > 0 && parts[0] == "album"
+    val parts = payload.split('\u0001')
+    val byAlbum = parts.isNotEmpty() && parts[0] == "album"
     val name = if (parts.size > 1) parts[1] else ""
     val owner = if (parts.size > 2) parts[2] else ""
-    val items = remember(payload) { StatsStore.tracksOfGroup(byAlbum, name, owner) }
+    val sinceDate = if (parts.size > 3 && parts[3].isNotEmpty()) parts[3] else null
+    // 详情按与榜单相同的时间范围聚合，否则从月榜点进去数字会对不上
+    val items = remember(payload) { StatsStore.tracksOfGroup(byAlbum, name, owner, sinceDate) }
     var page by remember(payload) { mutableStateOf(0) }
     val pageSize = 10
     val pageCount = if (items.isEmpty()) 1 else (items.size + pageSize - 1) / pageSize
@@ -648,7 +650,8 @@ internal fun StepperRow(
 internal fun StepButton(glyph: String, enabled: Boolean, onClick: () -> Unit) {
     val p = LocalSaltPalette.current
     Surface(
-        onClick = onClick,
+        // 置灰时也要真正禁用：Surface(onClick) 不会看 enabled 参数
+        onClick = { if (enabled) onClick() },
         shape = SaltDesign.shapeSmall,
         color = if (enabled) p.subBackground else Color.Transparent,
         modifier = Modifier.size(32.dp)

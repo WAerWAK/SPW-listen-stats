@@ -7,7 +7,9 @@ import java.text.SimpleDateFormat
 import java.time.LocalDate
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * 统计仓库 + 内存聚合
@@ -40,8 +42,41 @@ object StatsStore {
     private var loaded = false
     private var replayedLines = 0
 
-    private val io = Executors.newSingleThreadExecutor { runnable ->
+    /** 写线程（插件停用后会释放，重新启用时重建） */
+    @Volatile
+    private var io = newIo()
+
+    private fun newIo() = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "listen-stats-writer").apply { isDaemon = true }
+    }
+
+    /** 插件停用时调用：先排空写队列再释放线程，避免重载插件累积线程 */
+    @Synchronized
+    internal fun shutdown() {
+        drainIo()
+        try {
+            io.shutdown()
+        } catch (t: Throwable) {
+            // 忽略
+        }
+        io = newIo()
+    }
+
+    /**
+     * 等写队列排空
+     *
+     * [record] 是异步落盘的；清空 / 恢复 / 备份前必须先排空，否则排队中的旧行会在
+     * 改名之后被追加回来（重启后旧数据"复活"），或者被压进备份包里。
+     * 注意：只能在持有本对象锁时调用，且写任务本身不能回头拿本对象的锁（否则死锁）。
+     */
+    private fun drainIo() {
+        try {
+            val latch = CountDownLatch(1)
+            io.execute { latch.countDown() }
+            latch.await(3, TimeUnit.SECONDS)
+        } catch (t: Throwable) {
+            // 超时/中断：继续执行，最坏情况是极少量行落错位置
+        }
     }
 
     private val dayFormat = SimpleDateFormat("yyyy-MM-dd", Locale.ROOT)
@@ -140,6 +175,8 @@ object StatsStore {
     fun backupTo(target: File): String {
         val dir = dataDir ?: return "没有数据目录"
         if (!dir.isDirectory) return "数据目录不存在"
+        // 等写队列排空，避免压到写了一半的行
+        drainIo()
         // 安全保护：不允许把备份写到数据文件本身上
         val targetPath = try {
             target.canonicalPath
@@ -178,7 +215,9 @@ object StatsStore {
             val eventsResult = writeDir(zos, File(dir, EVENTS_DIR), EVENTS_DIR, targetPath)
             written += eventsResult[0].toInt()
             totalBytes += eventsResult[1]
-            for (extra in arrayOf("config.json", "ui-state.json", DICT_FILE + ".bak")) {
+            // 只带真正存在的附加文件：reset/restore 生成的备份名带时间戳，
+            // 固定名 "tracks.jsonl.bak" 几乎不可能存在，之前是无效项
+            for (extra in arrayOf("config.json", "ui-state.json")) {
                 val f = File(dir, extra)
                 val fPath = try {
                     f.canonicalPath
@@ -358,16 +397,27 @@ object StatsStore {
     fun restoreFrom(source: File): String {
         ensureLoaded()
         val dir = dataDir ?: return "没有数据目录"
+        // 排队中的写入先落地，否则解压后又被追加旧行
+        drainIo()
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(Date())
         var restored = 0
-        // 1) 先备份现有数据（改名，不删除）
+        // 1) 先备份现有数据（改名，不删除）；记录改名清单，失败时回滚
+        val renamed = ArrayList<Pair<File, File>>(4)
         val dict = File(dir, DICT_FILE)
-        if (dict.isFile) dict.renameTo(File(dir, DICT_FILE + "." + stamp + ".bak"))
+        if (dict.isFile) {
+            val bak = File(dir, DICT_FILE + "." + stamp + ".bak")
+            if (dict.renameTo(bak)) renamed.add(Pair(bak, dict))
+        }
         for (name in arrayOf(DAILY_DIR, EVENTS_DIR)) {
             val d = File(dir, name)
-            if (d.isDirectory) d.renameTo(File(dir, name + "." + stamp + ".bak"))
+            if (d.isDirectory) {
+                val bak = File(dir, name + "." + stamp + ".bak")
+                if (d.renameTo(bak)) renamed.add(Pair(bak, d))
+            }
         }
-        // 2) 解压
+        // 2) 解压（记录写出的文件，失败时删掉并回滚 .bak）
+        val written = ArrayList<File>(32)
+        var writeFailed = false
         var zis: java.util.zip.ZipInputStream? = null
         try {
             zis = java.util.zip.ZipInputStream(source.inputStream().buffered())
@@ -411,7 +461,11 @@ object StatsStore {
                 }
                 out.close()
                 zis.closeEntry()
-                if (failed) break
+                if (failed) {
+                    writeFailed = true
+                    break
+                }
+                written.add(target)
                 restored++
             }
         } catch (t: Throwable) {
@@ -420,12 +474,17 @@ object StatsStore {
             } catch (e: Throwable) {
                 // 忽略
             }
+            rollbackRestore(written, renamed)
             return "恢复失败：" + t.message
         }
         try {
             zis.close()
         } catch (e: Throwable) {
             // 忽略
+        }
+        if (writeFailed || restored == 0) {
+            rollbackRestore(written, renamed)
+            return if (writeFailed) "恢复失败：写入中断，已还原原数据" else "压缩包为空，未恢复任何数据"
         }
         // 3) 重置内存，下次访问重新加载
         TrackDict.clear()
@@ -437,8 +496,45 @@ object StatsStore {
         replayedLines = 0
         loaded = false
         dataVersion++
-        if (restored == 0) return "压缩包为空，未恢复任何数据"
         return "已恢复 " + restored + " 个文件（原数据已改名为 .bak 保留）"
+    }
+
+    /**
+     * 恢复失败时回滚：删掉本次解压出的文件，把 .bak 改回原名
+     *
+     * 否则用户选错文件 / zip 损坏后，原数据只剩一堆 .bak，面板里数据"消失"，
+     * 只能手动去数据目录改名才能找回。
+     */
+    private fun rollbackRestore(written: ArrayList<File>, renamed: ArrayList<Pair<File, File>>) {
+        var i = 0
+        while (i < written.size) {
+            try {
+                written[i].delete()
+            } catch (t: Throwable) {
+                // 忽略
+            }
+            i++
+        }
+        i = 0
+        while (i < renamed.size) {
+            val p = renamed[i]
+            try {
+                if (!p.second.exists()) p.first.renameTo(p.second)
+            } catch (t: Throwable) {
+                // 忽略
+            }
+            i++
+        }
+        // 内存已清空 → 下次访问时重新加载回原数据
+        TrackDict.clear()
+        tracks.clear()
+        days.clear()
+        dayTracks.clear()
+        totalCount = 0
+        totalMs = 0L
+        replayedLines = 0
+        loaded = false
+        dataVersion++
     }
 
 
@@ -693,14 +789,20 @@ object StatsStore {
      * @param byAlbum true = 专辑， false = 艺术家
      * @param name 专辑名或艺术家名（与榜单显示名一致）
      * @param owner 专辑艺术家（仅专辑模式使用，空则不限）
+     * @param sinceDate 与榜单一致的时间范围（null = 总榜），否则详情里的次数/时长会和列表行对不上
      */
     @Synchronized
-    fun tracksOfGroup(byAlbum: Boolean, name: String, owner: String): List<TrackAgg> {
+    fun tracksOfGroup(
+        byAlbum: Boolean,
+        name: String,
+        owner: String,
+        sinceDate: String? = null
+    ): List<TrackAgg> {
         ensureLoaded()
         val out = ArrayList<TrackAgg>()
         val target = name.trim()
         if (target.isEmpty()) return out
-        val source = rangeAggregatedTracks(null)
+        val source = rangeAggregatedTracks(sinceDate)
         for (agg in source.values) {
             if (agg.count <= 0 && agg.listenedMs <= 0L) continue
             if (byAlbum) {
@@ -712,7 +814,7 @@ object StatsStore {
                     val displayOwner = GroupKeys.albumDisplayArtist(agg.albumArtist, agg.artist)
                     if (!displayOwner.equals(owner.trim(), ignoreCase = true)) continue
                 }
-                out.add(agg)
+                out.add(agg.copyOf())
             } else {
                 val parts = GroupKeys.splitArtists(agg.artist)
                 var found = false
@@ -724,7 +826,7 @@ object StatsStore {
                     }
                     i++
                 }
-                if (found) out.add(agg)
+                if (found) out.add(agg.copyOf())
             }
         }
         out.sortWith(Comparator { a, b ->
@@ -979,12 +1081,20 @@ object StatsStore {
     fun reset(): String {
         ensureLoaded()
         val dir = dataDir
+        // 先排空写队列：否则排队中的旧事件会在改名之后又被追加到 events/、daily/
+        drainIo()
         tracks.clear()
         days.clear()
         dayTracks.clear()
         totalCount = 0
         totalMs = 0L
         replayedLines = 0
+        // 曲目字典必须一起清：否则 reset 前听过的歌还留在内存里，
+        // TrackDict.ensure() 命中后不再写新字典（旧文件已改名），
+        // 重启后这些曲目全部变成空标题 / 空艺术家
+        TrackDict.clear()
+        // 让面板的 1.5 秒轮询感知到清空
+        dataVersion++
         if (dir == null) return "已清空（无数据目录）"
 
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(Date())
@@ -1033,14 +1143,45 @@ object StatsStore {
         val out = ArrayList<DayAgg>()
         var i = 0
         while (i < limit && i < sorted.size) {
-            val src = sorted[i]
-            val copy = DayAgg(src.date)
-            copy.count = src.count
-            copy.listenedMs = src.listenedMs
-            out.add(copy)
+            out.add(copyDay(sorted[i]))
             i++
         }
         return out
+    }
+
+    /**
+     * 全部有记录的天（按日期升序）
+     *
+     * 活跃度页必须用它：热力图的年份视图和时长分布的自定义区间都按日历查值，
+     * 用「最近 N 天」当数据源会让更早的日期静默变成「无收听」。
+     */
+    @Synchronized
+    fun allDays(): List<DayAgg> {
+        ensureLoaded()
+        val sorted = ArrayList<DayAgg>(days.size)
+        for (d in days.values) sorted.add(d)
+        sorted.sortWith(Comparator { a, b -> a.date.compareTo(b.date) })
+        val out = ArrayList<DayAgg>(sorted.size)
+        var i = 0
+        while (i < sorted.size) {
+            out.add(copyDay(sorted[i]))
+            i++
+        }
+        return out
+    }
+
+    /** 按天聚合的深拷贝（对外一律返回拷贝，避免 UI 在锁外读到并发修改的中间值） */
+    private fun copyDay(src: DayAgg): DayAgg {
+        val copy = DayAgg(src.date)
+        copy.count = src.count
+        copy.listenedMs = src.listenedMs
+        var h = 0
+        while (h < 24) {
+            copy.hours[h] = src.hours[h]
+            copy.hoursMs[h] = src.hoursMs[h]
+            h++
+        }
+        return copy
     }
 
     private fun matches(agg: TrackAgg, needle: String): Boolean {
@@ -1504,6 +1645,7 @@ internal fun TrackAgg.copyOf(): TrackAgg {
     c.title = title
     c.artist = artist
     c.album = album
+    c.albumArtist = albumArtist
     c.count = count
     c.listenedMs = listenedMs
     c.skipCount = skipCount

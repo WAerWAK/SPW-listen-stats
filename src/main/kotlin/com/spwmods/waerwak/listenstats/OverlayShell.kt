@@ -64,7 +64,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import kotlin.math.roundToInt
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.spwmods.waerwak.listenstats.stats.StatsStore
@@ -76,9 +75,6 @@ import com.spwmods.waerwak.listenstats.ui.HostFont
 import com.spwmods.waerwak.listenstats.ui.saltPalette
 import java.time.LocalDate
 
-internal const val PAGE_SIZE = 12
-
-
 internal val TABS = arrayOf("概览", "排行", "活跃度", "信息")
 
 
@@ -88,10 +84,14 @@ internal fun OverlayHost() {
     var hovered by remember { mutableStateOf(false) }
     val opened = OverlayInjection.panelOpen.value
 
-    // 关闭面板（含浮钮状态复位）
+    // 关闭面板（含浮钮状态与全局弹层复位）
     val closePanel: () -> Unit = {
         OverlayInjection.panelOpen.value = false
         hovered = false
+        // 详情 / 日历浮层是全局状态：不复位的话下次打开面板会直接弹回上次那一层
+        TrackDetailState.open.value = null
+        GroupDetailState.open.value = ""
+        CalState.open.value = false
     }
 
     // 面板外部关闭时也复位悬停态（Navigator hook 与 AWT 监听两条路径都走这里）
@@ -146,12 +146,13 @@ internal fun OverlayHost() {
 
     // 同步宿主的深浅色与字体
     val dark = HostAppearance.isDarkTheme()
-    // 窗口样式只读一次：既判断是否材质模式，也决定卡片覆盖层的透明度（亚克力 25% / 云母 14%）
+    // 窗口样式：决定是否材质模式、卡片覆盖层透明度，以及面板根是否透出 DWM 材质
     val styleName = HostAppearance.windowStyleName()
     val materialStyle = styleName == "WindowsAcrylic" || styleName == "WindowsMica" ||
         styleName == "WindowsMicaAlt"
-    val materialActive = com.spwmods.waerwak.listenstats.ui.HostMaterialState.bridgeAvailable && materialStyle
-    val palette = saltPalette(dark, materialActive, styleName)
+    // 配色只看样式，不看桥接是否可用：桥接失效时由 transparentPanel 退回实色底，
+    // 而不是掉回经典色（否则云母 Alt 会显示成经典灰）
+    val palette = saltPalette(dark, materialStyle, styleName)
     val hostFont = remember { HostFont.family() }
 
     // 全局字体增加值：通过覆盖 Density.fontScale 实现（sp 变大，dp 不变）
@@ -421,10 +422,14 @@ internal object EscGate {
 
 @Composable
 internal fun StatsOverlay(onClose: () -> Unit) {
-    var tab by remember {
-        val requested = OverlayInjection.pendingTab.value
-        OverlayInjection.pendingTab.value = -1
-        mutableStateOf(if (requested >= 0) requested else 0)
+    var tab by remember { mutableStateOf(0) }
+    // 配置页 / 顶栏按钮可以指定打开哪一页；用 State 订阅，面板已打开时也能切过去
+    val pendingTab = OverlayInjection.pendingTab.value
+    LaunchedEffect(pendingTab) {
+        if (pendingTab >= 0) {
+            tab = pendingTab
+            OverlayInjection.pendingTab.value = -1
+        }
     }
     var tick by remember { mutableStateOf(0) }
     // 实时刷新只驱动概览/排行/信息页；活跃度页（371 个热力格子）不跟随实时刷新，
@@ -441,7 +446,8 @@ internal fun StatsOverlay(onClose: () -> Unit) {
             }
         }
     }
-    val liveKey = tick * 100000 + liveTick
+    // 用 Long 拼键：Int 拼接在连续播放 41.7 小时后会与 tick 进位重叠，导致该次刷新丢失
+    val liveKey: Long = tick.toLong() * 1_000_000L + liveTick.toLong()
     var showThresholdEditor by remember { mutableStateOf(false) }
     var showRetentionEditor by remember { mutableStateOf(false) }
     var showFontSizeEditor by remember { mutableStateOf(false) }
@@ -497,11 +503,12 @@ internal fun StatsOverlay(onClose: () -> Unit) {
 
     // 背景模式判定要提前到根 Surface 之前：根 Surface 的颜色会盖住内部所有背景绘制
     val bridgeAvailable = com.spwmods.waerwak.listenstats.ui.HostMaterialState.bridgeAvailable
-    val materialStyle = HostAppearance.isMaterialStyle()
-    val transparentRoot = bridgeAvailable && materialStyle
+    val rootPalette = LocalSaltPalette.current
+    // 只有「调色板允许透明」且桥接层真的在工作时才透出 DWM，否则用实色兜底
+    val transparentRoot = bridgeAvailable && rootPalette.transparentPanel
     Surface(
         modifier = Modifier.fillMaxSize(),
-        color = if (transparentRoot) Color.Transparent else LocalSaltPalette.current.background
+        color = if (transparentRoot) Color.Transparent else rootPalette.background
     ) {
     Box(
         Modifier.fillMaxSize()
@@ -527,17 +534,7 @@ internal fun StatsOverlay(onClose: () -> Unit) {
                 }
             }
     ) {
-    // 背景：材质样式 → 透明（让 DWM 亚克力/云母透出）；经典样式 → 纯色。截图方案已移除
-    val bridgeOn = com.spwmods.waerwak.listenstats.ui.HostMaterialState.bridgeAvailable
-    if (!(bridgeOn && materialStyle)) {
-        val darkBg = LocalSaltPalette.current.isDark
-        Box(
-            Modifier.fillMaxSize().drawBehind {
-                drawRect(if (darkBg) Color(0xFF232323) else Color(0xFFF8F8F8))
-            }
-        )
-    }
-    // 底部留 76dp：避开浮动胶囊迷你播放条（面板内容不被遮挡）
+    // 底部留 87dp：避开浮动胶囊迷你播放条（面板内容不被遮挡）
     Column(
         Modifier.fillMaxSize().padding(
             start = SaltDesign.padding,
@@ -561,7 +558,6 @@ internal fun StatsOverlay(onClose: () -> Unit) {
             var contentW = availDp * ratio
             if (contentW > availDp) contentW = availDp
             if (contentW < 280.dp) contentW = if (availDp < 280.dp) availDp else 280.dp
-            val sideGap = if (availDp > contentW) (availDp - contentW) / 2 else 0.dp
             Column(Modifier.width(contentW)) {
                 HeaderBar(onClose = onClose, onRefresh = { tick = tick + 1 })
                 Spacer(Modifier.height(12.dp))
@@ -579,7 +575,7 @@ internal fun StatsOverlay(onClose: () -> Unit) {
                         },
                         label = "tab-switch"
                     ) { currentTab ->
-                        ScrollArea(resetKey = currentTab, barRightExtra = sideGap) {
+                        ScrollArea(resetKey = currentTab) {
                             when (currentTab) {
                                 0 -> OverviewTab(liveKey)
                                 1 -> RankingTab(liveKey)
@@ -793,7 +789,7 @@ internal fun TabBar(selected: Int, onSelect: (Int) -> Unit) {
 
 
 
-/** 自绘的 Tab 图标（0 概览 / 1 排行 / 2 活跃度 / 3 设置） */
+/** 自绘的 Tab 图标（0 概览 / 1 排行 / 2 活跃度 / 3 信息） */
 @Composable
 internal fun TabIcon(kind: Int, color: Color) {
     Box(

@@ -72,7 +72,8 @@ object CountRule {
             // 不 reload 会读到启动时的旧值（为以后加 edittext 预留）。
             h.reload()
             minSeconds = ((h.get(KEY_MIN_SEC, 30) as? Number)?.toInt() ?: 30).coerceIn(LIMIT_MIN_SEC, LIMIT_MAX_SEC)
-            percent = ((h.get(KEY_PERCENT, 50) as? Number)?.toInt() ?: 50).coerceIn(0, 100)
+            // 下限 1：percent=0 时「取较小」模式的门槛会变成 0，任何一次位置增量都算计数
+            percent = ((h.get(KEY_PERCENT, 50) as? Number)?.toInt() ?: 50).coerceIn(1, 100)
             mode = if (h.get(KEY_MODE, "min") == "min") "min" else "max"
             ignoreMinSeconds = ((h.get(KEY_IGNORE_SEC, 5) as? Number)?.toInt() ?: 5)
                 .coerceIn(LIMIT_IGNORE_MIN_SEC, LIMIT_IGNORE_MAX_SEC)
@@ -84,7 +85,7 @@ object CountRule {
     @Synchronized
     fun save(newMinSec: Int, newPercent: Int, newMode: String, newIgnoreSec: Int = 5) {
         minSeconds = newMinSec.coerceIn(LIMIT_MIN_SEC, LIMIT_MAX_SEC)
-        percent = newPercent.coerceIn(0, 100)
+        percent = newPercent.coerceIn(1, 100)
         mode = if (newMode == "min") "min" else "max"
         ignoreMinSeconds = newIgnoreSec.coerceIn(LIMIT_IGNORE_MIN_SEC, LIMIT_IGNORE_MAX_SEC)
         try {
@@ -108,7 +109,7 @@ object CountRule {
         newIgnoreSec: Int = 0
     ) {
         minSeconds = newMinSec.coerceIn(LIMIT_MIN_SEC, LIMIT_MAX_SEC)
-        percent = newPercent.coerceIn(0, 100)
+        percent = newPercent.coerceIn(1, 100)
         mode = if (newMode == "min") "min" else "max"
         ignoreMinSeconds = newIgnoreSec.coerceIn(LIMIT_IGNORE_MIN_SEC, LIMIT_IGNORE_MAX_SEC)
         // 测试会连续切换规则，重置节流保证下一次 load 真的执行
