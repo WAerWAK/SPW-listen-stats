@@ -5,8 +5,8 @@
 <h1 align="center">听歌统计 · Salt Player for Windows 插件</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC-v1.4.10-8B5CF6?labelColor=1F2937" alt="最新版本">
-  <img src="https://img.shields.io/badge/SPW-1.19.0-3B82F6?labelColor=1F2937" alt="SPW 版本">
+  <img src="https://img.shields.io/badge/%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC-v1.4.11-8B5CF6?labelColor=1F2937" alt="最新版本">
+  <img src="https://img.shields.io/badge/SPW-1.19.1-3B82F6?labelColor=1F2937" alt="SPW 版本">
   <img src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows-0EA5E9?labelColor=1F2937" alt="平台">
   <img src="https://img.shields.io/badge/license-Apache--2.0-22C55E?labelColor=1F2937" alt="许可证">
 </p>
@@ -149,16 +149,21 @@ com.spwmods.waerwak.listenstats
    cp gradle.properties.example gradle.properties
    ```
    把 `spwHostJar` 指向本机 SPW 安装目录下的 fat jar（Steam 版是 `app/ffmpeg-x64.dll`）。
-2. 构建：
+2. 生成编译桩（SPW 1.19.1 起宿主把 `META-INF/runtime.kotlin_module` 清成空壳，缺少它源码无法编译）：
+   ```bash
+   python tools/gen-runtime-module-patch.py
+   ```
+   产出 `libs/runtime-module-patch.jar`，只参与编译（`compileOnly`），不打包进插件。宿主以后修好该文件即可删掉此步。
+3. 构建：
    ```bash
    gradle build
    ```
-3. 产物：`build/libs/plugin-com.spwmods.waerwak.listenstats-<version>.spmod`
+4. 产物：`build/libs/plugin-com.spwmods.waerwak.listenstats-<version>.spmod`
 
 一键部署（开发用，会重启 SPW）：
 
 ```powershell
-pwsh -File tools/deploy.ps1 -SpmodPath build/libs/plugin-com.spwmods.waerwak.listenstats-1.4.10.spmod
+pwsh -File tools/deploy.ps1 -SpmodPath build/libs/plugin-com.spwmods.waerwak.listenstats-1.4.11.spmod
 ```
 
 ---
@@ -199,6 +204,7 @@ src/main/kotlin/com/spwmods/waerwak/listenstats/
     ├── HostFont.kt             宿主字体同步
     ├── HostWindow.kt           宿主主窗口定位
     ├── NavigationHook.kt       导航 / 返回键 hook
+    ├── HostUiTargets.kt        宿主混淆类名映射（按 SPW 版本）
     ├── TitlebarButton.kt       标题栏入口按钮
     ├── CoverCache.kt           封面缩略图缓存（LRU + 128px 降采样）
     └── UiStateStore.kt         面板 UI 状态持久化
