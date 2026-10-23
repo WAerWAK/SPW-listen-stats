@@ -1,3 +1,7 @@
+> 10月23日
+> 接下来大约半个月时间无法更新，若在此期间由于SPW更新导致插件无法使用，可以先尝试使用其他同功能插件。
+
+
 <p align="center">
   <img src="docs/screenshots/workshop-cover.png" width="420" alt="听歌统计封面">
 </p>
