@@ -476,6 +476,35 @@ object StatsActions {
         })
     }
 
+    /**
+     * 弹出对话框：合并导入另一份备份（按会话 id 去重，可重复导入）
+     *
+     * 与"恢复数据"的区别：保留现有统计，把备份里没有的播放明细并进来。
+     */
+    @JvmStatic
+    @JvmName("mergeImportDialog")
+    fun mergeImportDialog() {
+        com.spwmods.waerwak.listenstats.ui.BackgroundDialogs.run({
+            val file = com.spwmods.waerwak.listenstats.ui.BackgroundDialogs.openFile("选择要合并的备份")
+            if (file == null) {
+                null
+            } else if (!com.spwmods.waerwak.listenstats.ui.BackgroundDialogs.confirm(
+                    "合并导入",
+                    "把「" + file.name + "」里的播放明细并入当前统计：\n" +
+                        "· 不会删除或覆盖现有记录\n" +
+                        "· 同一份备份导入多次也不会重复计数\n" +
+                        "· 备份里若只有按天聚合数据（没有明细），会被拒绝\n\n继续吗？"
+                )
+            ) {
+                null
+            } else {
+                StatsStore.importMerge(file)
+            }
+        }, { message ->
+            if (message != null) toast(message, message.startsWith("已合并"))
+        })
+    }
+
     /** 弹出对话框：从备份恢复（先展示备份内容摘要，确认后才覆盖） */
     @JvmStatic
     @JvmName("restoreDataDialog")

@@ -874,6 +874,40 @@ fun main() {
         check(StatsStore.loadError() == null, "修好后错误应消失，实际 " + StatsStore.loadError())
     }
 
+    test("合并导入按会话去重且可重复导入") {
+        val dir1 = freshEnv()
+        val a = track("merge-a", title = "合并A")
+        SessionTracker.onTrack(a)
+        SessionTracker.onPlayingChanged(true)
+        playFor(a, 0L, 40 * SECOND)
+        SessionTracker.flush()
+        val b = track("merge-b", title = "合并B")
+        SessionTracker.onTrack(b)
+        SessionTracker.onPlayingChanged(true)
+        playFor(b, 0L, 40 * SECOND)
+        SessionTracker.flush()
+        Thread.sleep(300L)
+        val backup = File(dir1, "merge.zip")
+        check(StatsStore.backupTo(backup).startsWith("已备份"), "备份应成功")
+
+        val dir2 = freshEnv()
+        val target = File(dir2, "merge.zip")
+        backup.copyTo(target, overwrite = true)
+        val first = StatsStore.importMerge(target)
+        check(first.startsWith("已合并 2 条"), "应合并 2 条，实际：" + first)
+        check(totalCount() == 2, "合并后次数应为 2，实际 " + totalCount())
+        check(totalListenedMs() >= 40 * SECOND, "合并后应有收听时长")
+        val trackA = findTrack("merge-a")
+        check(trackA != null, "合并后曲目应能查到")
+        check(trackA!!.title == "合并A", "合并后标题应来自备份的曲目字典")
+
+        val second = StatsStore.importMerge(target)
+        check(second.contains("没有新记录") || second.startsWith("已合并 0"), "重复导入不应新增，实际：" + second)
+        check(totalCount() == 2, "重复导入后次数仍应为 2，实际 " + totalCount())
+
+        dir1.deleteRecursively()
+    }
+
     println()
     println("结果：通过 " + passed + " / 失败 " + failed)
     cleanup()

@@ -27,6 +27,13 @@
         },
         {
           "type": "button",
+          "title": "合并导入备份",
+          "summary": "把另一份备份里的播放明细并入当前统计（按会话去重，可重复导入）",
+          "arrow_type": "link",
+          "on_click": "com.spwmods.waerwak.listenstats.StatsActions.mergeImportDialog"
+        },
+        {
+          "type": "button",
           "title": "清空统计",
           "summary": "内存清零，事件日志改名为 .bak（可恢复）",
           "arrow_type": "none",

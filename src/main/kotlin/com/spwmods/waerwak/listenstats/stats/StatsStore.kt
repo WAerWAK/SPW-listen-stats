@@ -691,6 +691,202 @@ object StatsStore {
     }
 
     /**
+     * 合并导入：把另一份备份里的播放**明细**并进来（按会话 id 去重）
+     *
+     * 与 restoreFrom 的区别：不替换现有数据，同一份备份导入两次也不会重复计数。
+     * 只认 events/ 里的明细（身份 = eid，旧数据用 id+t+ms）；备份里没有明细时拒绝，
+     * 因为按天聚合行没有身份，合并必然重复计数。
+     */
+    @Synchronized
+    fun importMerge(source: File): String {
+        ensureLoaded()
+        val dir = dataDir ?: return "没有数据目录"
+        drainIo()
+        val invalid = validateBackup(source)
+        if (invalid != null) return invalid
+        val imported = ArrayList<PlayEvent>(256)
+        val dictLines = ArrayList<String>(64)
+        var duplicates = 0
+        var badLines = 0
+        var zip: java.util.zip.ZipFile? = null
+        try {
+            zip = java.util.zip.ZipFile(source)
+            val names = zipNames(zip)
+            val existing = existingEventIdentities(dir)
+            var i = 0
+            while (i < names.size) {
+                val name = names[i]
+                i++
+                if (name == DICT_FILE) {
+                    val entry = zip.getEntry(name) ?: continue
+                    val text = String(zip.getInputStream(entry).readBytes(), Charsets.UTF_8)
+                    val lines = text.split('\n')
+                    var k = 0
+                    while (k < lines.size) {
+                        if (lines[k].isNotBlank()) dictLines.add(lines[k])
+                        k++
+                    }
+                    continue
+                }
+                if (!name.startsWith(EVENTS_DIR + "/") || !name.endsWith(".jsonl")) continue
+                val entry = zip.getEntry(name) ?: continue
+                val text = String(zip.getInputStream(entry).readBytes(), Charsets.UTF_8)
+                val lines = text.split('\n')
+                var k = 0
+                while (k < lines.size) {
+                    val line = lines[k]
+                    k++
+                    if (line.isBlank()) continue
+                    val event = PlayEvent.fromJsonLine(line)
+                    if (event == null) {
+                        badLines++
+                        continue
+                    }
+                    val identity = eventIdentity(event)
+                    if (existing.contains(identity)) {
+                        duplicates++
+                        continue
+                    }
+                    existing.add(identity)
+                    imported.add(event)
+                }
+            }
+        } catch (t: Throwable) {
+            return "合并失败：" + (t.message ?: t.javaClass.simpleName)
+        } finally {
+            try {
+                zip?.close()
+            } catch (t: Throwable) {
+                // 忽略
+            }
+        }
+        if (imported.isEmpty()) {
+            return if (duplicates > 0) {
+                "没有新记录：备里的 " + duplicates + " 条都已存在"
+            } else {
+                "备份里没有可合并的播放明细（只有按天聚合数据，请用「恢复数据」）"
+            }
+        }
+        // 1) 先补曲目字典：标题/艺术家/封面对得上
+        var ci = 0
+        while (ci < dictLines.size) {
+            val line = dictLines[ci]
+            ci++
+            val key = JsonLite.string(line, "k")
+            if (key.isEmpty()) continue
+            if (TrackDict.get(key) != null) continue
+            TrackDict.ensure(
+                key,
+                JsonLite.string(line, "id"),
+                JsonLite.string(line, "ti"),
+                JsonLite.string(line, "ar"),
+                JsonLite.string(line, "al"),
+                JsonLite.long(line, "dur"),
+                JsonLite.string(line, "aa")
+            )
+        }
+        TrackDict.flush()
+        // 2) 逐条并入内存 + 追加明细与聚合行
+        var addedMs = 0L
+        var addedCount = 0
+        var ev = 0
+        while (ev < imported.size) {
+            val event = imported[ev]
+            ev++
+            applyToMemory(event)
+            addedMs += event.ms
+            if (event.counted) addedCount++
+            val spans = normalizedSpans(event)
+            val startMs = if (spans.size >= 2) spans[0] else event.t
+            val day = dayFormat.format(Date(startMs))
+            val line = event.toJsonLine()
+            val dailyLines = buildDailyLines(event, TrackDict.keyOf(event.id, event.path))
+            io.execute {
+                try {
+                    val eventFile = File(File(dir, EVENTS_DIR), day + ".jsonl")
+                    val eventParent = eventFile.parentFile
+                    if (eventParent != null) eventParent.mkdirs()
+                    Files.write(
+                        eventFile.toPath(),
+                        listOf(line),
+                        Charsets.UTF_8,
+                        StandardOpenOption.CREATE,
+                        StandardOpenOption.APPEND
+                    )
+                    var li = 0
+                    while (li < dailyLines.size) {
+                        val dailyLine = dailyLines[li]
+                        li++
+                        val lineDay = JsonLite.string(dailyLine, "d")
+                        val month = if (lineDay.length >= 7) lineDay.substring(0, 7) else lineDay
+                        val dailyFile = File(File(dir, DAILY_DIR), month + ".jsonl")
+                        val dailyParent = dailyFile.parentFile
+                        if (dailyParent != null) dailyParent.mkdirs()
+                        Files.write(
+                            dailyFile.toPath(),
+                            listOf(dailyLine),
+                            Charsets.UTF_8,
+                            StandardOpenOption.CREATE,
+                            StandardOpenOption.APPEND
+                        )
+                    }
+                } catch (t: Throwable) {
+                    System.err.println("[listen-stats] 合并写入失败: " + t.message)
+                }
+            }
+        }
+        drainIo()
+        dataVersion++
+        return "已合并 " + imported.size + " 条新记录（跳过 " + duplicates + " 条重复、" + badLines +
+            " 条无法解析），新增时长 " + durationText(addedMs)
+    }
+
+    private fun durationText(ms: Long): String {
+        if (ms <= 0L) return "0 分钟"
+        val minutes = (ms + 30_000L) / 60_000L
+        val hours = minutes / 60L
+        val rest = minutes % 60L
+        if (hours > 0L && rest > 0L) return hours.toString() + " 小时 " + rest + " 分"
+        if (hours > 0L) return hours.toString() + " 小时"
+        return rest.toString() + " 分钟"
+    }
+
+    /** 现有明细的身份集合（eid；旧数据退化为 id+t+ms） */
+    private fun existingEventIdentities(dir: File): HashSet<String> {
+        val set = HashSet<String>(256)
+        val files = File(dir, EVENTS_DIR).listFiles()
+        if (files == null) return set
+        var i = 0
+        while (i < files.size) {
+            val file = files[i]
+            i++
+            if (!file.isFile || !file.name.endsWith(".jsonl")) continue
+            try {
+                val reader = Files.newBufferedReader(file.toPath(), Charsets.UTF_8)
+                try {
+                    while (true) {
+                        val line = reader.readLine()
+                        if (line == null) break
+                        if (line.isBlank()) continue
+                        val event = PlayEvent.fromJsonLine(line)
+                        if (event != null) set.add(eventIdentity(event))
+                    }
+                } finally {
+                    reader.close()
+                }
+            } catch (t: Throwable) {
+                // 读不了的单条文件跳过，不影响其余合并
+            }
+        }
+        return set
+    }
+
+    private fun eventIdentity(event: PlayEvent): String {
+        if (event.eid.isNotEmpty()) return "e:" + event.eid
+        return "s:" + event.id + "|" + event.t + "|" + event.ms
+    }
+
+    /**
      * 恢复失败时回滚：删掉本次解压出的文件，把 .bak 改回原名
      *
      * 否则用户选错文件 / zip 损坏后，原数据只剩一堆 .bak，面板里数据"消失"，
