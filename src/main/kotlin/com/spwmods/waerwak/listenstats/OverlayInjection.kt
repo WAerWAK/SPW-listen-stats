@@ -290,6 +290,13 @@ object OverlayInjection {
             if (titlebarError != null || navError != null) {
                 writeDiag("install-partial", "titlebar=" + (titlebarError ?: "-") + " nav=" + (navError ?: "-"))
             }
+            writeDiag(
+                "install",
+                "ok handle=true nav=" + (navError == null) +
+                    " titlebar=" + (titlebarError == null) +
+                    " titlebarErr=" + (titlebarError ?: "-") +
+                    " material=" + (materialHandle != null)
+            )
             "已注册：窗口右下角会出现一个「只露一点」的圆"
         } catch (t: Throwable) {
             // 回滚：handle 已赋值时如果只记录错误，installed() 会一直是 true，
