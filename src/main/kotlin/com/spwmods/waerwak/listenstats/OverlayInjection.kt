@@ -14,6 +14,7 @@ import androidx.compose.ui.input.pointer.onPointerEvent
 import com.spwmods.waerwak.listenstats.stats.StatsStore
 import com.spwmods.waerwak.listenstats.stats.TrackAgg
 import com.spwmods.waerwak.listenstats.ui.UiStateStore
+import com.spwmods.waerwak.listenstats.ui.discovery.HostLayerSite
 import com.xuncorp.spw.workshop.api.PluginPermission
 import com.xuncorp.spw.workshop.api.WorkshopApi
 import com.xuncorp.spw.workshop.api.hook.HookHandle
@@ -208,6 +209,43 @@ object OverlayInjection {
         toast("已打开统计面板，可在「信息 → 采集」调整计数门槛", true)
     }
 
+    /**
+     * 尝试包住宿主 Layer
+     *
+     * 成功返回 true（handle 已就位）；失败会回滚并把原因写进 hook-diag，由调用方回退旧点位。
+     */
+    private fun installLayerIfPossible(site: HostLayerSite?): Boolean {
+        if (site == null) return false
+        return try {
+            val layerMethod = com.spwmods.waerwak.listenstats.ui.resolveLayerMethod(site)
+            handle = WorkshopApi.hookRegistrar.replaceComposable(
+                className = site.target.dottedOwner(),
+                methodName = site.target.name,
+                inClass = site.caller.replace('/', '.'),
+                parameterTypes = listOf(
+                    "androidx.compose.ui.Modifier",
+                    "boolean",
+                    "kotlin.jvm.functions.Function3"
+                )
+            ) { call: UiHookCall ->
+                com.spwmods.waerwak.listenstats.ui.HostLayerStage(call, layerMethod)
+            }
+            true
+        } catch (t: Throwable) {
+            writeDiag(
+                "install",
+                "layer-failed " + t.javaClass.simpleName + ": " + t.message + "（回退 AppNavigation 点位）"
+            )
+            try {
+                handle?.unhook()
+            } catch (e: Throwable) {
+                // 回滚失败不影响后续
+            }
+            handle = null
+            false
+        }
+    }
+
     @Synchronized
     fun install(): String {
         if (handle != null) return "已注册（无需重复）"
@@ -239,12 +277,31 @@ object OverlayInjection {
                 (if (resolved.detail.isEmpty()) "" else "  " + resolved.detail)
         )
         return try {
-            handle = WorkshopApi.hookRegistrar.afterComposable(
-                className = TARGET_CLASS,
-                methodName = TARGET_METHOD,
-                inClass = uiTargets.pageCaller
-            ) { _: UiHookCall ->
-                OverlayHost()
+            // 首选：包住宿主 Layer（不与其它插件抢 AppNavigation 的替换点）
+            val layerInstalled = installLayerIfPossible(resolved.layer)
+            if (!layerInstalled) {
+                // 回退路径：afterComposable 装面板 + replaceComposable 装材质层
+                handle = WorkshopApi.hookRegistrar.afterComposable(
+                    className = TARGET_CLASS,
+                    methodName = TARGET_METHOD,
+                    inClass = uiTargets.pageCaller
+                ) { _: UiHookCall ->
+                    OverlayHost()
+                }
+                // 背景材质桥接层（可选）：替换宿主 AppNavigation 调用，面板打开时隐藏宿主内容
+                // 失败则静默降级为现有截图/不透明背景
+                try {
+                    materialHandle = WorkshopApi.hookRegistrar.replaceComposable(
+                        className = TARGET_CLASS,
+                        methodName = TARGET_METHOD,
+                        inClass = uiTargets.pageCaller
+                    ) { _: UiHookCall ->
+                        com.spwmods.waerwak.listenstats.ui.HostMaterialLayer()
+                    }
+                } catch (t: Throwable) {
+                    System.err.println("[listen-stats] 材质桥接层注册失败（降级为不透明背景）: ${t.message}")
+                    materialHandle = null
+                }
             }
             // 读取 UI 状态（内容宽度百分比等）
             contentPercent.value = UiStateStore.loadContentPercent()
@@ -269,20 +326,6 @@ object OverlayInjection {
             )
             // 标题栏入口（失败静默降级，浮钮仍在）
             com.spwmods.waerwak.listenstats.ui.TitlebarButton.install(uiTargets)
-            // 背景材质桥接层（可选）：替换宿主 AppNavigation 调用，面板打开时隐藏宿主内容
-            // 失败则静默降级为现有截图/不透明背景
-            try {
-                materialHandle = WorkshopApi.hookRegistrar.replaceComposable(
-                    className = TARGET_CLASS,
-                    methodName = TARGET_METHOD,
-                    inClass = uiTargets.pageCaller
-                ) { _: UiHookCall ->
-                    com.spwmods.waerwak.listenstats.ui.HostMaterialLayer()
-                }
-            } catch (t: Throwable) {
-                System.err.println("[listen-stats] 材质桥接层注册失败（降级为不透明背景）: ${t.message}")
-                materialHandle = null
-            }
             lastError = null
             // 子项失败不影响主流程，但要在信息页诊断里能看到（不写日志文件）
             val titlebarError = com.spwmods.waerwak.listenstats.ui.TitlebarButton.lastError
@@ -292,10 +335,10 @@ object OverlayInjection {
             }
             writeDiag(
                 "install",
-                "ok handle=true nav=" + (navError == null) +
+                "ok handle=true layer=" + layerInstalled +
+                    " nav=" + (navError == null) +
                     " titlebar=" + (titlebarError == null) +
-                    " titlebarErr=" + (titlebarError ?: "-") +
-                    " material=" + (materialHandle != null)
+                    " titlebarErr=" + (titlebarError ?: "-")
             )
             "已注册：窗口右下角会出现一个「只露一点」的圆"
         } catch (t: Throwable) {
@@ -368,6 +411,7 @@ object OverlayInjection {
         materialHandle = null
         com.spwmods.waerwak.listenstats.ui.HostMaterialState.bridgeAvailable = false
         com.spwmods.waerwak.listenstats.ui.HostMaterialState.hidden = false
+        com.spwmods.waerwak.listenstats.ui.HostMaterialState.layerMode = false
         try {
             handle?.unhook()
         } catch (t: Throwable) {

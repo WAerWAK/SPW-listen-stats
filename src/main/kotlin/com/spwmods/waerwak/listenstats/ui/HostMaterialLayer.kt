@@ -1,3 +1,8 @@
+@file:OptIn(
+    androidx.compose.runtime.InternalComposeApi::class,
+    com.xuncorp.spw.workshop.api.UnstableSpwWorkshopApi::class
+)
+
 package com.spwmods.waerwak.listenstats.ui
 
 import androidx.compose.foundation.layout.Box
@@ -15,7 +20,12 @@ import androidx.compose.ui.layout.MeasureResult
 import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.runtime.currentComposer
+import com.spwmods.waerwak.listenstats.OverlayHost
+import com.spwmods.waerwak.listenstats.ui.discovery.HostLayerSite
+import com.xuncorp.spw.workshop.api.hook.UiHookCall
 import com.xuncorp.voxzen.ui.navigation.AppNavigation
+import java.lang.reflect.Method
 
 /**
  * 宿主材质桥接层
@@ -38,6 +48,13 @@ object HostMaterialState {
 
     /** 面板打开时置 true，隐藏宿主内容 */
     var hidden by mutableStateOf(false)
+
+    /**
+     * 注入模式：true = 包住宿主 Layer（新，不与其他插件抢 AppNavigation），
+     * false = 替换 AppNavigation 调用点（旧，回退路径）
+     */
+    var layerMode by mutableStateOf(false)
+        internal set
 }
 
 /** 保留测量、隐藏时移到屏幕外（比跳过 place 更可靠：某些 Compose 版本跳过 place 后仍绘制在 0,0） */
@@ -85,3 +102,57 @@ fun HostMaterialLayer() {
         AppNavigation()
     }
 }
+
+/**
+ * 解析宿主 Layer 方法
+ *
+ * 签名固定为 `(Modifier, boolean, Function3, Composer, int, int)`；结构判据已在发现阶段校验过，
+ * 这里只做反射定位与静态方法断言。
+ */
+internal fun resolveLayerMethod(site: HostLayerSite): Method {
+    val loader = HostMaterialState::class.java.classLoader
+    val clazz = Class.forName(site.target.dottedOwner(), false, loader)
+    val m = clazz.getDeclaredMethod(
+        site.target.name,
+        Modifier::class.java,
+        java.lang.Boolean::class.javaPrimitiveType,
+        kotlin.jvm.functions.Function3::class.java,
+        androidx.compose.runtime.Composer::class.java,
+        Int::class.javaPrimitiveType,
+        Int::class.javaPrimitiveType
+    )
+    check(java.lang.reflect.Modifier.isStatic(m.modifiers)) { "宿主 Layer 必须是静态方法" }
+    m.isAccessible = true
+    return m
+}
+
+/**
+ * 包住宿主 Layer 的入口（B2 方案）
+ *
+ * 与之相比，替换 AppNavigation 会和所有插件抢同一个替换点；包住 Layer 只影响自己这一层，
+ * 宿主内容仍然由原 Layer 组合，我们只决定"放不放下"和"上面再画什么"。
+ */
+@Composable
+fun HostLayerStage(call: UiHookCall, layerMethod: Method) {
+    DisposableEffect(Unit) {
+        HostMaterialState.bridgeAvailable = true
+        HostMaterialState.layerMode = true
+        onDispose {
+            HostMaterialState.bridgeAvailable = false
+            HostMaterialState.layerMode = false
+        }
+    }
+    val modifier = call.getArgument(0) as Modifier
+    var decoration = false
+    val rawDecoration = call.getArgument(1)
+    if (rawDecoration is Boolean) decoration = rawDecoration
+    val content = call.getArgument(2)
+    val composer = currentComposer
+    Box(Modifier.fillMaxSize()) {
+        RetainedHostContent(HostMaterialState.hidden) {
+            layerMethod.invoke(null, modifier, decoration, content, composer, 0, 0)
+        }
+        OverlayHost()
+    }
+}
+

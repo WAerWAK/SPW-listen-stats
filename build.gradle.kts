@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.spwmods.waerwak.listenstats"
-version = "1.4.14"
+version = "1.4.15"
 
 val pluginId = "com.spwmods.waerwak.listenstats"
 val pluginVersion = version.toString()
@@ -90,6 +90,23 @@ tasks.register<JavaExec>("runDataTests") {
         "-Dspw.host.jar=" + hostStubJar.get().asFile.absolutePath
     )
     dependsOn(prepareHostStub)
+}
+
+/**
+ * 部署前门禁：离线扫描宿主 jar 校验 hook 目标（不启动 SPW、不注册 hook）
+ */
+tasks.register<JavaExec>("probeHookTargets") {
+    group = "verification"
+    description = "离线校验 hook 目标：扫描宿主 jar 并打印发现结果"
+    dependsOn("testClasses", prepareHostStub)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("com.spwmods.waerwak.listenstats.test.ProbeHookTargetsKt")
+    val jdk25Home = providers.gradleProperty("jdk25Home").getOrElse("D:/Projects/.tools/jdk25")
+    executable = "$jdk25Home/bin/java.exe"
+    val probeJar = providers.gradleProperty("spwProbeJar").getOrElse(hostStubJar.get().asFile.absolutePath)
+    val probeVersion = providers.gradleProperty("spwProbeVersion").getOrElse("")
+    args(probeJar, probeVersion)
+    jvmArgs("-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8")
 }
 
 tasks.withType<JavaCompile>().configureEach {
