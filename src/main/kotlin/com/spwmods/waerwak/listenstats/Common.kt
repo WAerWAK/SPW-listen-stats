@@ -732,14 +732,27 @@ internal fun formatLastPlayed(timestamp: Long): String {
 }
 
 
+/** 概览/榜单用：四舍五入到分钟（29 秒 → 0 分，30 秒 → 1 分） */
 internal fun formatMs(ms: Long): String {
     if (ms <= 0L) return "0 分"
-    val totalMinutes = ms / 60_000L
+    val totalMinutes = (ms + 30_000L) / 60_000L
     val hours = totalMinutes / 60L
     val minutes = totalMinutes % 60L
     if (hours > 0L && minutes > 0L) return hours.toString() + " 小时 " + minutes + " 分"
     if (hours > 0L) return hours.toString() + " 小时"
     return minutes.toString() + " 分钟"
+}
+
+/** 明细/曲目详情用：精确到秒（不足 1 分钟只显示秒） */
+internal fun formatMsPrecise(ms: Long): String {
+    if (ms <= 0L) return "0 秒"
+    val totalSeconds = (ms + 500L) / 1_000L
+    val hours = totalSeconds / 3_600L
+    val minutes = (totalSeconds % 3_600L) / 60L
+    val seconds = totalSeconds % 60L
+    if (hours > 0L) return hours.toString() + " 小时 " + minutes + " 分 " + seconds + " 秒"
+    if (minutes > 0L) return minutes.toString() + " 分 " + seconds + " 秒"
+    return seconds.toString() + " 秒"
 }
 
 

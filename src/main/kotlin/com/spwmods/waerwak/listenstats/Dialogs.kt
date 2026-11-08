@@ -202,7 +202,7 @@ internal fun GroupDetailDialog(payload: String, onDismiss: () -> Unit) {
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    totalCount.toString() + " 次 · " + formatMs(totalMs) + " · " + items.size + " 首曲目",
+                    totalCount.toString() + " 次 · " + formatMsPrecise(totalMs) + " · " + items.size + " 首曲目",
                     fontSize = SaltDesign.fontSizeMain,
                     color = p.labelAccent
                 )
@@ -235,7 +235,7 @@ internal fun GroupDetailDialog(payload: String, onDismiss: () -> Unit) {
                             Text(t.count.toString() + " 次", fontSize = SaltDesign.fontSizeSub, color = p.text)
                         }
                         Box(Modifier.width(74.dp), contentAlignment = Alignment.CenterEnd) {
-                            Text(formatMs(t.listenedMs), fontSize = SaltDesign.fontSizeSub, color = p.subText)
+                            Text(formatMsPrecise(t.listenedMs), fontSize = SaltDesign.fontSizeSub, color = p.subText)
                         }
                     }
                     from++
@@ -321,7 +321,7 @@ internal fun TrackDetailDialog(trackKey: String, onDismiss: () -> Unit) {
                 val skipRate = if (plays > 0) skips * 100 / plays else 0
                 Row(Modifier.fillMaxWidth()) {
                     KpiCell("总播放", (agg?.count ?: 0).toString() + " 次", Modifier.weight(1f))
-                    KpiCell("累计时长", formatMs(agg?.listenedMs ?: 0L), Modifier.weight(1f))
+                    KpiCell("累计时长", formatMsPrecise(agg?.listenedMs ?: 0L), Modifier.weight(1f))
                     KpiCell("跳过率", skipRate.toString() + "%", Modifier.weight(1f))
                 }
                 Spacer(Modifier.height(8.dp))
@@ -363,7 +363,7 @@ internal fun TrackDetailDialog(trackKey: String, onDismiss: () -> Unit) {
                         }
                         Box(Modifier.weight(1f)) {
                             Text(
-                                formatMs(e.ms),
+                                formatMsPrecise(e.ms),
                                 fontSize = SaltDesign.fontSizeSub,
                                 color = p.text
                             )
@@ -433,7 +433,7 @@ internal fun DayDetailDialog(date: String, onDismiss: () -> Unit) {
             Column(Modifier.width(560.dp).padding(20.dp)) {
                 GroupHeader(date + "（" + weekdayText(date) + "）")
                 Text(
-                    totalCount.toString() + " 次 · " + formatMs(totalMs) + " · " + items.size + " 首曲目",
+                    totalCount.toString() + " 次 · " + formatMsPrecise(totalMs) + " · " + items.size + " 首曲目",
                     fontSize = SaltDesign.fontSizeMain,
                     color = p.labelAccent
                 )
@@ -477,7 +477,7 @@ internal fun DayDetailDialog(date: String, onDismiss: () -> Unit) {
                             Text(item.count.toString() + " 次", fontSize = SaltDesign.fontSizeSub, color = p.text)
                         }
                         Box(Modifier.width(74.dp), contentAlignment = Alignment.CenterEnd) {
-                            Text(formatMs(item.listenedMs), fontSize = SaltDesign.fontSizeSub, color = p.subText)
+                            Text(formatMsPrecise(item.listenedMs), fontSize = SaltDesign.fontSizeSub, color = p.subText)
                         }
                     }
                     from++

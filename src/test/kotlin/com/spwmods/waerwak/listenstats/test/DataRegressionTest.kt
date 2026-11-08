@@ -701,6 +701,68 @@ fun main() {
         checkNear(agg!!.listenedMs, 20 * SECOND, 3 * SECOND, "停摆的 20 秒不应计入")
     }
 
+    test("暂停缺口不进入听音区间") {
+        freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 0)
+        val item = track("spans-pause", durationMs = 5 * MINUTE)
+        SessionTracker.onTrack(item)
+        SessionTracker.onPlayingChanged(true)
+        playFor(item, 0L, 10 * SECOND)
+        SessionTracker.onPlayingChanged(false)
+        advance(60 * SECOND)
+        SessionTracker.onPosition(10 * SECOND)
+        SessionTracker.onPlayingChanged(true)
+        playFor(item, 10 * SECOND, 10 * SECOND)
+        SessionTracker.flush()
+        Thread.sleep(400L)
+        val history = StatsStore.trackHistory("spans-pause", 5)
+        check(history.size == 1, "应有一条事件，实际 " + history.size)
+        val e = history[0]
+        check(e.eid.isNotEmpty(), "事件应带会话 id")
+        check(e.spanCount() == 2, "应有 2 段区间，实际 " + e.spanCount())
+        var sum = 0L
+        var i = 0
+        while (i + 1 < e.spans.size) {
+            sum += e.spans[i + 1]
+            i += 2
+        }
+        checkNear(sum, e.ms, 1L, "区间之和应等于总时长")
+        val gap = e.spans[2] - (e.spans[0] + e.spans[1])
+        check(gap > 50 * SECOND, "暂停的 60 秒不应落在区间内，实际空隙 " + gap + "ms")
+    }
+
+    test("崩溃恢复保留听音区间与会话 id") {
+        val dir = freshEnv()
+        val now = System.currentTimeMillis()
+        val spanStart = now - 120_000L
+        val file = File(dir, "live-session.json")
+        file.writeText(
+            "{\"v\":2,\"ms\":40000,\"t\":" + (now - 60_000L) +
+                ",\"dur\":300000,\"c\":true,\"savedAt\":" + now +
+                ",\"id\":\"spanrec\",\"eid\":\"e-1\",\"s\":\"" + spanStart + ":40000\"" +
+                ",\"ti\":\"恢复区间\"}",
+            Charsets.UTF_8
+        )
+        val ok = LiveSessionStore.recover()
+        check(ok, "恢复应该成功")
+        Thread.sleep(400L)
+        val history = StatsStore.trackHistory("spanrec", 5)
+        check(history.size == 1, "应有一条事件，实际 " + history.size)
+        val e = history[0]
+        check(e.eid == "e-1", "会话 id 应保留，实际 " + e.eid)
+        check(e.spanCount() == 1, "区间应保留，实际 " + e.spanCount())
+        check(e.spans[0] == spanStart, "区间起点应保留")
+        checkNear(e.ms, 40 * SECOND, 1L, "恢复后的总时长")
+    }
+
+    test("时长格式四舍五入") {
+        check(com.spwmods.waerwak.listenstats.formatMs(29_999L) == "0 分钟", "29.9 秒应进到 0 分钟，实际 " + com.spwmods.waerwak.listenstats.formatMs(29_999L))
+        check(com.spwmods.waerwak.listenstats.formatMs(30_000L) == "1 分钟", "30 秒应进位到 1 分钟")
+        check(com.spwmods.waerwak.listenstats.formatMs(89_999L) == "1 分钟", "89.9 秒应显示 1 分钟")
+        check(com.spwmods.waerwak.listenstats.formatMs(90_000L) == "2 分钟", "90 秒应进位到 2 分钟")
+        check(com.spwmods.waerwak.listenstats.formatMsPrecise(149_000L) == "2 分 29 秒", "秒级明细：" + com.spwmods.waerwak.listenstats.formatMsPrecise(149_000L))
+        check(com.spwmods.waerwak.listenstats.formatMsPrecise(59_400L) == "59 秒", "不足 1 分钟只显示秒")
+    }
+
     println()
     println("结果：通过 " + passed + " / 失败 " + failed)
     cleanup()

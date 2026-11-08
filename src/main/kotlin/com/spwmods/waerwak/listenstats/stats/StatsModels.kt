@@ -1,6 +1,15 @@
 package com.spwmods.waerwak.listenstats.stats
 
-/** 一遍播放结束产生的事件（事件日志的一行） */
+/**
+ * 一遍播放结束产生的事件（事件日志的一行）
+ *
+ * @property t 事件结束时间（wall clock）
+ * @property ms 本遍有效听音总毫秒（等于 spans 时长之和）
+ * @property eid 本遍会话 id（UUID）：合并导入时用来去重
+ * @property spans 实际听音区间，扁平存 `[start1, dur1, start2, dur2, …]`（绝对 epoch ms）；
+ *   暂停/缓冲不在区间内，所以能精确按天/小时归属。旧事件没有这个字段时按单区间近似。
+ * @property approx 区间是否由推算得到（旧数据、崩溃恢复、时钟被调整过）
+ */
 data class PlayEvent(
     val t: Long,
     val id: String,
@@ -12,8 +21,27 @@ data class PlayEvent(
     val ms: Long,
     val dur: Long,
     val counted: Boolean,
-    val skipped: Boolean
+    val skipped: Boolean,
+    val eid: String = "",
+    val spans: LongArray = LongArray(0),
+    val approx: Boolean = false
 ) {
+    /** 区间数量 */
+    fun spanCount(): Int = spans.size / 2
+
+    /** 把区间序列化成事件行里的紧凑字符串（start:dur,start:dur） */
+    fun spansToText(): String {
+        if (spans.size < 2) return ""
+        val sb = StringBuilder(spans.size * 8)
+        var i = 0
+        while (i + 1 < spans.size) {
+            if (i > 0) sb.append(',')
+            sb.append(spans[i]).append(':').append(spans[i + 1])
+            i += 2
+        }
+        return sb.toString()
+    }
+
     fun toJsonLine(): String {
         val sb = StringBuilder(192)
         sb.append('{')
@@ -30,11 +58,53 @@ data class PlayEvent(
         sb.append("\"dur\":").append(dur).append(',')
         sb.append("\"counted\":").append(counted).append(',')
         sb.append("\"skipped\":").append(skipped)
+        if (eid.isNotEmpty()) sb.append(",\"eid\":\"").append(JsonLite.escape(eid)).append('"')
+        val spanText = spansToText()
+        if (spanText.isNotEmpty()) sb.append(",\"s\":\"").append(spanText).append('"')
+        if (approx) sb.append(",\"ap\":true")
         sb.append('}')
         return sb.toString()
     }
 
     companion object {
+        /** 解析事件行里的区间串（"start:dur,start:dur"） */
+        fun parseSpans(text: String): LongArray {
+            if (text.isEmpty()) return LongArray(0)
+            var count = 1
+            var i = 0
+            while (i < text.length) {
+                if (text[i] == ',') count++
+                i++
+            }
+            val out = LongArray(count * 2)
+            var index = 0
+            var pos = 0
+            while (pos < text.length && index + 1 < out.size) {
+                var comma = text.indexOf(',', pos)
+                if (comma < 0) comma = text.length
+                var part = text.substring(pos, comma)
+                var colon = part.indexOf(':')
+                if (colon > 0) {
+                    val start = part.substring(0, colon).toLongOrNull()
+                    val dur = part.substring(colon + 1).toLongOrNull()
+                    if (start != null && dur != null && dur > 0L) {
+                        out[index] = start
+                        out[index + 1] = dur
+                        index += 2
+                    }
+                }
+                pos = comma + 1
+            }
+            if (index == out.size) return out
+            val trimmed = LongArray(index)
+            var k = 0
+            while (k < index) {
+                trimmed[k] = out[k]
+                k++
+            }
+            return trimmed
+        }
+
         fun fromJsonLine(line: String): PlayEvent? {
             if (line.isEmpty() || line[0] != '{') return null
             val t = JsonLite.long(line, "t", -1L)
@@ -50,7 +120,10 @@ data class PlayEvent(
                 ms = JsonLite.long(line, "ms"),
                 dur = JsonLite.long(line, "dur"),
                 counted = JsonLite.bool(line, "counted"),
-                skipped = JsonLite.bool(line, "skipped")
+                skipped = JsonLite.bool(line, "skipped"),
+                eid = JsonLite.string(line, "eid"),
+                spans = parseSpans(JsonLite.string(line, "s")),
+                approx = JsonLite.bool(line, "ap")
             )
         }
     }

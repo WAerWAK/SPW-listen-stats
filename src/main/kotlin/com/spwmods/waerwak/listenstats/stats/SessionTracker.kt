@@ -54,6 +54,14 @@ object SessionTracker {
         var durationMs: Long = 0L
         /** 本遍的近似开始时间（崩溃恢复时用来还原时间位置） */
         var startTimeMs: Long = 0L
+        /** 本遍会话 id：合并导入时用来去重 */
+        val eid: String = java.util.UUID.randomUUID().toString()
+        /** 实际听音区间，扁平存 [start, dur, start, dur, …]（绝对 epoch ms） */
+        val spans = ArrayList<LongArray>()
+        /** 区间是否含推算成分（墙钟被调整过 / 崩溃恢复补齐） */
+        var approx: Boolean = false
+        /** 上一步的墙钟时间，用来发现系统时钟跳变 */
+        var lastWallMs: Long = 0L
     }
 
     private var session: Session? = null
@@ -152,6 +160,10 @@ object SessionTracker {
 
         val delta = position - last
         val elapsed = (now - lastNano) / 1_000_000L
+        if (firstPlayingState == 0) {
+            firstPlayingState = if (playing == null) 3 else if (playing == true) 1 else 2
+        }
+        if (elapsed > maxGapMs) maxGapMs = elapsed
 
         // 大幅回退（拖回开头 / 单曲循环 / 宿主重置位置）：已计过数就结算这一遍
         if (delta < -BACK_JUMP_TOLERANCE_MS) {
@@ -171,6 +183,7 @@ object SessionTracker {
 
         // 位置在动但数据不可信（停摆过久 / 幅度超过容差 = 拖进度条、跳转）：重建基准，不计数
         if (elapsed < 0L || elapsed > MAX_STEP_MS || !withinStepTolerance(delta, elapsed) || playing == false) {
+            if (elapsed > MAX_STEP_MS || (playing != false && !withinStepTolerance(delta, elapsed))) droppedSteps++
             current.lastPosition = position
             current.lastNano = now
             return null
@@ -181,6 +194,7 @@ object SessionTracker {
 
         // 记的是经过的时间，位置只作证据：宿主位置粒度比回调粗时也不会少记
         current.listenedMs += elapsed
+        appendSpan(current, wallClock(), elapsed)
         if (!current.counted) {
             val threshold = StatsThresholds.countThreshold(current.durationMs)
             if (current.listenedMs >= threshold) current.counted = true
@@ -199,8 +213,31 @@ object SessionTracker {
             albumArtist = current.meta.albumArtist,
             listenedMs = current.listenedMs,
             durationMs = current.durationMs,
-            counted = current.counted
+            counted = current.counted,
+            eid = current.eid,
+            spans = flattenSpans(current),
+            approx = current.approx
         )
+    }
+
+    /** 追加一段实际听音区间；与上一段首尾相接时合并，避免区间碎片化 */
+    private fun appendSpan(current: Session, wallNow: Long, elapsed: Long) {
+        if (elapsed <= 0L) return
+        if (current.lastWallMs > 0L) {
+            val expected = current.lastWallMs + elapsed
+            if (wallNow - expected > 100L || expected - wallNow > 100L) current.approx = true
+        }
+        val start = wallNow - elapsed
+        current.lastWallMs = wallNow
+        val n = current.spans.size
+        if (n >= 1) {
+            val last = current.spans[n - 1]
+            if (last[0] + last[1] == start) {
+                current.spans[n - 1] = longArrayOf(last[0], last[1] + elapsed)
+                return
+            }
+        }
+        current.spans.add(longArrayOf(start, elapsed))
     }
 
     /**
@@ -257,6 +294,30 @@ object SessionTracker {
         current.lastNano = 0L
     }
 
+    // ---------------------------------------------------------------- 诊断
+
+    /** 被丢弃的步进数（采样停摆 / 位置跳变） */
+    @Volatile
+    var droppedSteps: Long = 0L
+        private set
+
+    /** 观察到的最大回调空档（毫秒） */
+    @Volatile
+    var maxGapMs: Long = 0L
+        private set
+
+    /** 首次收到位置回调时的播放态：0 未知 / 1 播放 / 2 暂停（=0 说明插件是曲中启用的） */
+    @Volatile
+    var firstPlayingState: Int = 0
+        private set
+
+    @Synchronized
+    internal fun resetDiagnostics() {
+        droppedSteps = 0L
+        maxGapMs = 0L
+        firstPlayingState = 0
+    }
+
     /** 结算当前一遍（换曲 / 停止 / 插件停用） */
     @Synchronized
     fun flush() {
@@ -283,8 +344,16 @@ object SessionTracker {
         val counted = current.counted
         // 过了忽略阈值但没到计数门槛 → 记一次跳过
         val skipped = !counted
+        val endAt = wallClock()
+        var spans = flattenSpans(current)
+        var approx = current.approx
+        if (spans.size < 2) {
+            // 没有任何区间（理论上进不来）：退化成"以结束时间倒推一整段"
+            spans = longArrayOf(endAt - current.listenedMs, current.listenedMs)
+            approx = true
+        }
         return PlayEvent(
-            t = wallClock(),
+            t = endAt,
             id = current.meta.id,
             path = current.meta.path,
             title = current.meta.title,
@@ -294,8 +363,76 @@ object SessionTracker {
             ms = current.listenedMs,
             dur = dur,
             counted = counted,
-            skipped = skipped
+            skipped = skipped,
+            eid = current.eid,
+            spans = spans,
+            approx = approx
         )
+    }
+
+    /** 把区间列表压平成一维数组；重叠/乱序时按起点排序并裁剪，保证时长守恒 */
+    private fun flattenSpans(current: Session): LongArray {
+        val list = current.spans
+        if (list.isEmpty()) return LongArray(0)
+        var out = LongArray(list.size * 2)
+        var i = 0
+        while (i < list.size) {
+            out[i * 2] = list[i][0]
+            out[i * 2 + 1] = list[i][1]
+            i++
+        }
+        // 插入排序（区间通常已经按时间递增，交换极少）
+        var a = 1
+        while (a < list.size) {
+            var b = a
+            while (b > 0 && out[(b - 1) * 2] > out[b * 2]) {
+                val s = out[(b - 1) * 2]
+                val d = out[(b - 1) * 2 + 1]
+                out[(b - 1) * 2] = out[b * 2]
+                out[(b - 1) * 2 + 1] = out[b * 2 + 1]
+                out[b * 2] = s
+                out[b * 2 + 1] = d
+                b--
+            }
+            a++
+        }
+        // 裁剪重叠：后一段起点不得早于前一段结束
+        var k = 1
+        while (k < list.size) {
+            val prevEnd = out[(k - 1) * 2] + out[(k - 1) * 2 + 1]
+            val start = out[k * 2]
+            val dur = out[k * 2 + 1]
+            if (start < prevEnd) {
+                val newDur = dur - (prevEnd - start)
+                if (newDur <= 0L) {
+                    out[k * 2 + 1] = 0L
+                } else {
+                    out[k * 2] = prevEnd
+                    out[k * 2 + 1] = newDur
+                }
+                current.approx = true
+            }
+            k++
+        }
+        // 去掉裁剪后为 0 的区间
+        var keep = 0
+        var j = 0
+        while (j < list.size) {
+            if (out[j * 2 + 1] > 0L) {
+                out[keep * 2] = out[j * 2]
+                out[keep * 2 + 1] = out[j * 2 + 1]
+                keep++
+            }
+            j++
+        }
+        if (keep == list.size) return out
+        val trimmed = LongArray(keep * 2)
+        var t = 0
+        while (t < keep * 2) {
+            trimmed[t] = out[t]
+            t++
+        }
+        return trimmed
     }
 
     private fun requestDuration(key: String, id: String) {

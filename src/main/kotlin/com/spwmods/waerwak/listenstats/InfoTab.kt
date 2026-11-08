@@ -290,6 +290,8 @@ internal fun InfoTab(
                         }
                     )
                     RowDivider()
+                    ItemRow("计时诊断", timingDiagnosticsText())
+                    RowDivider()
                     ItemRow("封面缓存", com.spwmods.waerwak.listenstats.ui.CoverCache.statsText())
                     RowDivider()
                     ItemRow("标题栏按钮", com.spwmods.waerwak.listenstats.ui.TitlebarButton.statusText())
@@ -567,6 +569,19 @@ internal fun hookHealth(): Pair<Boolean, String> {
 }
 
 
+/** 计时诊断一行：丢步数 / 最大回调空档 / 首个回调时的播放态 */
+private fun timingDiagnosticsText(): String {
+    val state = when (com.spwmods.waerwak.listenstats.stats.SessionTracker.firstPlayingState) {
+        1 -> "播放"
+        2 -> "暂停"
+        3, 0 -> "未知（曲中启用）"
+        else -> "?"
+    }
+    return "丢步 " + com.spwmods.waerwak.listenstats.stats.SessionTracker.droppedSteps +
+        " · 空档 " + (com.spwmods.waerwak.listenstats.stats.SessionTracker.maxGapMs / 1000L) + "s" +
+        " · 初始 " + state
+}
+
 /** 拼一段可直接贴给开发者排查的诊断文本 */
 internal fun buildDiagnostics(
     snap: ProbeSnapshot,
@@ -599,6 +614,7 @@ internal fun buildDiagnostics(
     sb.append("标题栏按钮: ").append(com.spwmods.waerwak.listenstats.ui.TitlebarButton.statusText()).append('\n')
     sb.append("播放: ").append(if (snap.isPlaying) "播放中" else "未播放")
         .append(" / 位置回调 ").append(snap.positionCallbacks).append(" 次").append('\n')
+        .append("计时诊断：").append(timingDiagnosticsText()).append('\n')
     sb.append("当前曲目: ").append(snap.lastTrackText).append('\n')
     return sb.toString()
 }

@@ -21,6 +21,7 @@ class ListenStatsPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext)
     private var hotkey: AutoCloseable? = null
 
     override fun start() {
+        SessionTracker.resetDiagnostics()
         HostProbe.attach(pluginContext)
         HostProbe.logStartup()
 

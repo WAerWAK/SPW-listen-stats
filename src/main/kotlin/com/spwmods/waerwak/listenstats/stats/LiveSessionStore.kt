@@ -35,7 +35,13 @@ object LiveSessionStore {
         val albumArtist: String,
         val listenedMs: Long,
         val durationMs: Long,
-        val counted: Boolean
+        val counted: Boolean,
+        /** 本遍会话 id（合并导入去重用） */
+        val eid: String = "",
+        /** 实际听音区间（扁平 [start,dur,…]） */
+        val spans: LongArray = LongArray(0),
+        /** 区间是否含推算成分 */
+        val approx: Boolean = false
     )
 
     @Volatile
@@ -83,7 +89,7 @@ object LiveSessionStore {
         val dir = StatsStore.dataDirOrNull() ?: return
         try {
             val target = File(dir, FILE_NAME)
-            if (target.isFile) target.writeText("{\"v\":1,\"ms\":0}", Charsets.UTF_8)
+            if (target.isFile) target.writeText("{\"v\":2,\"ms\":0}", Charsets.UTF_8)
         } catch (t: Throwable) {
             lastError = t.javaClass.simpleName + ": " + t.message
         }
@@ -122,6 +128,24 @@ object LiveSessionStore {
         val counted = JsonLite.bool(text, "c")
         val skipped = !counted
         val start = JsonLite.long(text, "t")
+        var spans = PlayEvent.parseSpans(JsonLite.string(text, "s"))
+        var approx = JsonLite.bool(text, "ap")
+        var total = ms
+        if (spans.size >= 2) {
+            var sum = 0L
+            var i = 0
+            while (i + 1 < spans.size) {
+                sum += spans[i + 1]
+                i += 2
+            }
+            if (sum > 0L) total = sum
+            if (total != ms) approx = true
+        } else {
+            // 旧格式（v1）只有总毫秒：用"结束时间倒推一整段"近似
+            val endAt = if (start > 0L) start + ms else now
+            spans = longArrayOf(endAt - ms, ms)
+            approx = true
+        }
         val event = PlayEvent(
             t = if (start > 0L) start + ms else now,
             id = JsonLite.string(text, "id"),
@@ -130,10 +154,13 @@ object LiveSessionStore {
             artist = JsonLite.string(text, "ar"),
             album = JsonLite.string(text, "al"),
             albumArtist = JsonLite.string(text, "aa"),
-            ms = ms,
+            ms = total,
             dur = dur,
             counted = counted,
-            skipped = skipped
+            skipped = skipped,
+            eid = JsonLite.string(text, "eid"),
+            spans = spans,
+            approx = approx
         )
         return try {
             StatsStore.record(event)
@@ -147,9 +174,9 @@ object LiveSessionStore {
     }
 
     private fun lineOf(s: Snapshot, savedAt: Long): String {
-        val sb = StringBuilder(256)
+        val sb = StringBuilder(320)
         sb.append('{')
-        sb.append("\"v\":1")
+        sb.append("\"v\":2")
         sb.append(",\"ms\":").append(s.listenedMs)
         sb.append(",\"t\":").append(s.startTimeMs)
         sb.append(",\"dur\":").append(s.durationMs)
@@ -173,6 +200,21 @@ object LiveSessionStore {
         if (s.albumArtist.isNotEmpty()) {
             sb.append(",\"aa\":\"").append(JsonLite.escape(s.albumArtist)).append('"')
         }
+        if (s.eid.isNotEmpty()) {
+            sb.append(",\"eid\":\"").append(JsonLite.escape(s.eid)).append('"')
+        }
+        val spans = s.spans
+        if (spans.size >= 2) {
+            val text = StringBuilder(spans.size * 8)
+            var i = 0
+            while (i + 1 < spans.size) {
+                if (i > 0) text.append(',')
+                text.append(spans[i]).append(':').append(spans[i + 1])
+                i += 2
+            }
+            sb.append(",\"s\":\"").append(text).append('"')
+        }
+        if (s.approx) sb.append(",\"ap\":true")
         sb.append('}')
         return sb.toString()
     }

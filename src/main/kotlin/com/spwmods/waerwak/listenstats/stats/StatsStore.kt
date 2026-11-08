@@ -118,7 +118,8 @@ object StatsStore {
         applyToMemory(event)
         val dir = dataDir
         if (dir == null) return
-        val startMs = if (event.ms > 0L && event.ms <= event.t) event.t - event.ms else event.t
+        val spans = normalizedSpans(event)
+        val startMs = if (spans.size >= 2) spans[0] else event.t
         // 明细文件按「开始日」归档（与次数归属一致）
         val day = dayFormat.format(Date(startMs))
         val key = TrackDict.keyOf(event.id, event.path)
@@ -1460,49 +1461,53 @@ object StatsStore {
      * `hr` 只在开始行写真实小时，其余行写 -1，避免加载时重复累加小时次数。
      */
     private fun buildDailyLines(event: PlayEvent, key: String): List<String> {
-        val startMs = if (event.ms > 0L && event.ms <= event.t) event.t - event.ms else event.t
+        val spans = normalizedSpans(event)
+        val startMs = if (spans.size >= 2) spans[0] else event.t
         val startDate = dayFormat.format(Date(startMs))
         val startHour = hourFormat.format(Date(startMs)).toIntOrNull() ?: 0
         val out = ArrayList<String>(3)
-        if (event.ms <= 0L) {
+        if (spans.size < 2) {
             out.add(
                 lineOf(startDate, key, startHour, startHour, 0L,
                     if (event.counted) 1 else 0, if (event.skipped) 1 else 0, event.t)
             )
             return out
         }
-        var cursor = startMs
-        var remain = event.ms
-        var guard = 0
-        while (remain > 0L && guard < 200) {
-            val zdt = try {
-                java.time.Instant.ofEpochMilli(cursor).atZone(java.time.ZoneId.systemDefault())
-            } catch (t: Throwable) {
-                break
-            }
-            val date = dayFormat.format(Date(cursor))
-            val hour = zdt.hour
-            val hourEnd = zdt.truncatedTo(java.time.temporal.ChronoUnit.HOURS)
-                .plusHours(1)
-                .toInstant()
-                .toEpochMilli()
-            var part = hourEnd - cursor
-            if (part > remain) part = remain
-            if (part <= 0L) break
-            val isStart = date == startDate && hour == startHour
-            out.add(
-                lineOf(
-                    // 次数/跳过只归开始那一行；时长所属小时每行都要写，
-                    // 否则跨小时那段的时长重新加载后进不了任何小时桶
-                    date, key, if (isStart) hour else -1, hour, part,
-                    if (isStart && event.counted) 1 else 0,
-                    if (isStart && event.skipped) 1 else 0,
-                    event.t
+        var first = true
+        var si = 0
+        while (si + 1 < spans.size) {
+            var cursor = spans[si]
+            var remain = spans[si + 1]
+            var guard = 0
+            while (remain > 0L && guard < 400) {
+                val zdt = try {
+                    java.time.Instant.ofEpochMilli(cursor).atZone(java.time.ZoneId.systemDefault())
+                } catch (t: Throwable) {
+                    break
+                }
+                val date = dayFormat.format(Date(cursor))
+                val hour = zdt.hour
+                val hourEnd = nextHourBoundary(cursor)
+                var part = hourEnd - cursor
+                if (part > remain) part = remain
+                if (part <= 0L) break
+                val isStart = first
+                out.add(
+                    lineOf(
+                        // 次数/跳过只归开始那一行；时长所属小时每行都要写，
+                        // 否则跨小时那段的时长重新加载后进不了任何小时桶
+                        date, key, if (isStart) hour else -1, hour, part,
+                        if (isStart && event.counted) 1 else 0,
+                        if (isStart && event.skipped) 1 else 0,
+                        event.t
+                    )
                 )
-            )
-            cursor += part
-            remain -= part
-            guard++
+                first = false
+                cursor += part
+                remain -= part
+                guard++
+            }
+            si += 2
         }
         if (out.isEmpty()) {
             out.add(
@@ -1511,6 +1516,37 @@ object StatsStore {
             )
         }
         return out
+    }
+
+    /** 事件的听音区间；旧事件没有 spans 时按"结束时间倒推一整段"近似 */
+    private fun normalizedSpans(event: PlayEvent): LongArray {
+        if (event.spans.size >= 2) return event.spans
+        if (event.ms <= 0L) return LongArray(0)
+        val start = if (event.t >= event.ms) event.t - event.ms else event.t
+        return longArrayOf(start, event.ms)
+    }
+
+    /**
+     * 下一个整点边界
+     *
+     * 不能简单用本地时间 truncate+plusHours：夏令时回拨的重叠小时里，它可能解析回更早的瞬间，
+     * 导致 part <= 0 而把剩余时长丢掉。这里用 zone rules 的 nextTransition 兜底。
+     */
+    private fun nextHourBoundary(instantMs: Long): Long {
+        val zone = java.time.ZoneId.systemDefault()
+        val instant = java.time.Instant.ofEpochMilli(instantMs)
+        val zdt = instant.atZone(zone)
+        var candidate = zdt.truncatedTo(java.time.temporal.ChronoUnit.HOURS)
+            .plusHours(1)
+            .toInstant()
+            .toEpochMilli()
+        val transition = zone.rules.nextTransition(instant)
+        if (transition != null) {
+            val transitionMs = transition.instant.toEpochMilli()
+            if (transitionMs > instantMs && transitionMs < candidate) candidate = transitionMs
+        }
+        if (candidate <= instantMs) candidate = instantMs + 3_600_000L
+        return candidate
     }
 
     /**
@@ -1564,10 +1600,7 @@ object StatsStore {
                 onPart(dayFormat.format(Date(cursor)), 0, remain)
                 return
             }
-            val hourEnd = zdt.truncatedTo(java.time.temporal.ChronoUnit.HOURS)
-                .plusHours(1)
-                .toInstant()
-                .toEpochMilli()
+            val hourEnd = nextHourBoundary(cursor)
             var part = hourEnd - cursor
             if (part > remain) part = remain
             if (part <= 0L) break
@@ -1603,7 +1636,8 @@ object StatsStore {
         if (agg.firstPlayed == 0L || event.t < agg.firstPlayed) agg.firstPlayed = event.t
         if (event.t > agg.lastPlayed) agg.lastPlayed = event.t
 
-        val startMs = if (event.ms > 0L && event.ms <= event.t) event.t - event.ms else event.t
+        val spans = normalizedSpans(event)
+        val startMs = if (spans.size >= 2) spans[0] else event.t
         val startDate = dayFormat.format(Date(startMs))
         val startHour = hourFormat.format(Date(startMs)).toIntOrNull() ?: 0
 
@@ -1616,33 +1650,47 @@ object StatsStore {
         if (event.counted) startDay.count++
         if (startHour >= 0 && startHour < 24) startDay.hours[startHour] += 1
 
-        // 时长按「天 + 小时」切分：跨午夜时两天各得自己那一段
-        splitByDayHour(startMs, event.ms) { dateKey, partHour, partMs ->
-            var d = days[dateKey]
-            if (d == null) {
-                d = DayAgg(dateKey)
-                days[dateKey] = d
+        // 时长按「区间 ∩ 天/小时」切分：暂停留下的空洞不会被摊到其他小时，跨天也各归各的
+        var si = 0
+        while (si + 1 < spans.size) {
+            splitByDayHour(spans[si], spans[si + 1]) { dateKey, partHour, partMs ->
+                var d = days[dateKey]
+                if (d == null) {
+                    d = DayAgg(dateKey)
+                    days[dateKey] = d
+                }
+                d.listenedMs += partMs
+                if (partHour >= 0 && partHour < 24) d.hoursMs[partHour] += partMs
             }
-            d.listenedMs += partMs
-            if (partHour >= 0 && partHour < 24) d.hoursMs[partHour] += partMs
+            si += 2
         }
 
-        var perDay = dayTracks[startDate]
-        if (perDay == null) {
-            perDay = LinkedHashMap()
-            dayTracks[startDate] = perDay
+        // 当天明细 / 月周榜：按时长实际落到的日期归属（不再整段算开始日）
+        var partIndex = 0
+        var pj = 0
+        while (pj + 1 < spans.size) {
+            splitByDayHour(spans[pj], spans[pj + 1]) { dateKey, _, partMs ->
+                var perDay = dayTracks[dateKey]
+                if (perDay == null) {
+                    perDay = LinkedHashMap()
+                    dayTracks[dateKey] = perDay
+                }
+                var dt = perDay[key]
+                if (dt == null) {
+                    dt = DayTrackAgg(dateKey, key)
+                    dt.title = event.title
+                    dt.artist = event.artist
+                    perDay[key] = dt
+                }
+                // 次数/跳过只记在开始日那一行，避免跨天时重复计次
+                if (partIndex == 0 && event.counted) dt.count++
+                if (partIndex == 0 && event.skipped) dt.skipCount++
+                dt.listenedMs += partMs
+                if (event.t > dt.lastPlayed) dt.lastPlayed = event.t
+                partIndex++
+            }
+            pj += 2
         }
-        var dt = perDay[key]
-        if (dt == null) {
-            dt = DayTrackAgg(startDate, key)
-            dt.title = event.title
-            dt.artist = event.artist
-            perDay[key] = dt
-        }
-        if (event.counted) dt.count++
-        dt.listenedMs += event.ms
-        if (event.skipped) dt.skipCount++
-        if (event.t > dt.lastPlayed) dt.lastPlayed = event.t
 
         if (event.counted) totalCount++
         totalMs += event.ms
