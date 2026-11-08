@@ -83,7 +83,13 @@ tasks.register<JavaExec>("runDataTests") {
     // 宿主类是 class file 69（JDK 25）编译的：运行时必须用 JDK 25，否则加载 MediaItem 会失败
     val jdk25Home = providers.gradleProperty("jdk25Home").getOrElse("D:/Projects/.tools/jdk25")
     executable = "$jdk25Home/bin/java.exe"
-    jvmArgs("-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8")
+    // 结构化发现测试直接扫这份宿主 jar（prepareHostStub 复制出来的 spw-host.jar）
+    jvmArgs(
+        "-Dfile.encoding=UTF-8",
+        "-Dstdout.encoding=UTF-8",
+        "-Dspw.host.jar=" + hostStubJar.get().asFile.absolutePath
+    )
+    dependsOn(prepareHostStub)
 }
 
 tasks.withType<JavaCompile>().configureEach {

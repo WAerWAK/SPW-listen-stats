@@ -165,7 +165,16 @@ object OverlayInjection {
     @JvmStatic
     @JvmName("installTitlebarFromConfig")
     fun installTitlebarFromConfig() {
-        val ok = com.spwmods.waerwak.listenstats.ui.TitlebarButton.install(hostVersion())
+        val resolved = com.spwmods.waerwak.listenstats.ui.discovery.HostTargetResolver.resolve(
+            pluginVersion = HostProbe.pluginContext()?.pluginVersion ?: "?",
+            hostVersion = hostVersion(),
+            cacheDir = StatsStore.dataDirOrNull()
+        )
+        if (resolved == null) {
+            toast("安装失败：无法识别宿主界面", false)
+            return
+        }
+        val ok = com.spwmods.waerwak.listenstats.ui.TitlebarButton.install(resolved.targets)
         if (ok) {
             toast("顶栏按钮已安装（标题栏 Quick 左侧）", true)
         } else {
@@ -199,21 +208,36 @@ object OverlayInjection {
         toast("已打开统计面板，可在「信息 → 采集」调整计数门槛", true)
     }
 
+    @Synchronized
     fun install(): String {
         if (handle != null) return "已注册（无需重复）"
         if (!WorkshopApi.manager.isPermissionGranted(PluginPermission.CLASS_TRANSFORM)) {
             lastError = "未授予 CLASS_TRANSFORM"
             return "失败：未授予 CLASS_TRANSFORM 权限"
         }
-        // 混淆名随宿主版本变化：按当前宿主版本取注入目标；未登记的版本一律不猜
+        // 注入目标：缓存 → 结构化发现（宿主字节码）→ 版本表回退；都失败就不猜，明确报错
         val hostVer = hostVersion()
-        val uiTargets = com.spwmods.waerwak.listenstats.ui.HostUiTargets.forVersion(hostVer)
-        if (uiTargets == null) {
+        val resolved = com.spwmods.waerwak.listenstats.ui.discovery.HostTargetResolver.resolve(
+            pluginVersion = HostProbe.pluginContext()?.pluginVersion ?: "?",
+            hostVersion = hostVer,
+            cacheDir = StatsStore.dataDirOrNull()
+        )
+        if (resolved == null) {
             val shown = if (hostVer.isEmpty()) "未知" else hostVer
-            lastError = "未适配的宿主版本 " + shown
-            writeDiag("install", "unsupported host=" + shown + "  skip-ui-injection（采集不受影响）")
-            return "未适配当前宿主版本（" + shown + "）：面板与顶栏入口暂不可用，听歌数据仍会正常记录"
+            lastError = "无法识别宿主界面（" + shown + "）"
+            writeDiag("install", "no-target host=" + shown + "  skip-ui-injection（采集不受影响）")
+            return "无法识别宿主界面（" + shown + "）：面板与顶栏入口暂不可用，听歌数据仍会正常记录"
         }
+        val uiTargets = resolved.targets
+        lastError = null
+        writeDiag(
+            "resolve",
+            "source=" + resolved.source +
+                "  page=" + uiTargets.pageCaller +
+                "  titlebar=" + uiTargets.titlebarCaller +
+                "  caption=" + uiTargets.debugCaption +
+                (if (resolved.detail.isEmpty()) "" else "  " + resolved.detail)
+        )
         return try {
             handle = WorkshopApi.hookRegistrar.afterComposable(
                 className = TARGET_CLASS,
@@ -244,7 +268,7 @@ object OverlayInjection {
                 }
             )
             // 标题栏入口（失败静默降级，浮钮仍在）
-            com.spwmods.waerwak.listenstats.ui.TitlebarButton.install(hostVersion())
+            com.spwmods.waerwak.listenstats.ui.TitlebarButton.install(uiTargets)
             // 背景材质桥接层（可选）：替换宿主 AppNavigation 调用，面板打开时隐藏宿主内容
             // 失败则静默降级为现有截图/不透明背景
             try {
@@ -298,6 +322,26 @@ object OverlayInjection {
         }
     }
 
+    /**
+     * 启动时后台安装
+     *
+     * 首次启用需要扫描宿主字节码（约 1~2 秒，之后走缓存），不能阻塞插件启动流程；
+     * 扫描期间面板/顶栏入口要等它完成（通常宿主还在加载界面，用户感知不到）。
+     */
+    fun installAsync() {
+        val thread = Thread({
+            try {
+                val message = install()
+                System.err.println("[listen-stats] 界面注入：" + message)
+            } catch (t: Throwable) {
+                System.err.println("[listen-stats] 界面注入异常：" + t.javaClass.simpleName + ": " + t.message)
+            }
+        }, "listen-stats-ui-install")
+        thread.isDaemon = true
+        thread.start()
+    }
+
+    @Synchronized
     fun uninstall() {
         try {
             com.spwmods.waerwak.listenstats.ui.NavigationHook.uninstall()

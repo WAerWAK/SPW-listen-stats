@@ -37,8 +37,9 @@ class ListenStatsPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext)
         registerHotkey()
 
         // 已授权 CLASS_TRANSFORM 时自动安装浮层（未授权则等用户手动触发）
+        // 后台安装：首次要扫描宿主字节码，不能卡住插件启动
         if (WorkshopApi.manager.isPermissionGranted(PluginPermission.CLASS_TRANSFORM)) {
-            OverlayInjection.install()
+            OverlayInjection.installAsync()
         }
     }
 

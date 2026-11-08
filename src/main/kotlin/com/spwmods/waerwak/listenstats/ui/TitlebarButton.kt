@@ -43,10 +43,6 @@ import com.xuncorp.spw.workshop.api.hook.HookHandle
  */
 object TitlebarButton {
 
-    private const val TARGET_METHOD = "\u037f"
-
-    /** 宿主 caption button 组件本体（1.19.1 签名；仅复用模式下使用） */
-    private const val CAPTION_CLASS = "com.xuncorp.voxzen.ui.component.\u0529"
     private const val CONTENT_DESCRIPTION = "听歌统计"
 
     /** 宿主 caption 按钮默认宽度（px） */
@@ -75,12 +71,22 @@ object TitlebarButton {
      * 宿主 caption button 的 10 参数重载
      *
      * `(Function0 onClick, String, Modifier, boolean, String, float, Function3<BoxScope>, Composer, int, int)`
+     *
+     * 类名来自结构化发现（或版本表），所以按类名缓存解析结果。
      */
-    private val captionMethod: java.lang.reflect.Method by lazy {
+    @Volatile
+    private var captionMethodCache: java.lang.reflect.Method? = null
+
+    @Volatile
+    private var captionMethodClassName: String = ""
+
+    private fun captionMethodOf(className: String, methodName: String): java.lang.reflect.Method {
+        val cached = captionMethodCache
+        if (cached != null && captionMethodClassName == className) return cached
         val loader = TitlebarButton::class.java.classLoader
-        val clazz = Class.forName(CAPTION_CLASS, false, loader)
+        val clazz = Class.forName(className, false, loader)
         val m = clazz.getDeclaredMethod(
-            TARGET_METHOD,
+            methodName,
             kotlin.jvm.functions.Function0::class.java,
             String::class.java,
             Modifier::class.java,
@@ -94,23 +100,20 @@ object TitlebarButton {
         )
         check(java.lang.reflect.Modifier.isStatic(m.modifiers)) { "caption button 必须是静态方法" }
         m.isAccessible = true
-        m
+        captionMethodCache = m
+        captionMethodClassName = className
+        return m
     }
 
-    fun install(spwVersion: String): Boolean {
+    fun install(t: HostUiTargets): Boolean {
         if (handle != null) return true
-        val t = HostUiTargets.forVersion(spwVersion)
-        if (t == null) {
-            lastError = "未适配的宿主版本（" + spwVersion + "）"
-            return false
-        }
         targets = t
         return try {
             // 复用宿主组件时提前解析签名：不支持就尽早失败，不影响主统计 hook
-            if (t.reuseHostCaption) captionMethod
+            if (t.reuseHostCaption) captionMethodOf(t.captionClass, t.captionMethodName)
             handle = WorkshopApi.hookRegistrar.afterComposable(
                 className = t.debugCaption,
-                methodName = TARGET_METHOD,
+                methodName = t.debugCaptionMethod,
                 inClass = t.titlebarCaller,
                 parameterTypes = emptyList()
             ) { _ ->
@@ -142,8 +145,11 @@ object TitlebarButton {
             return
         }
         val composer = currentComposer
+        val captionClass = t.captionClass
+        val captionMethodName = t.captionMethodName
         try {
-            captionMethod.invoke(
+            val method = captionMethodOf(captionClass, captionMethodName)
+            method.invoke(
                 null,
                 { OverlayInjection.togglePanel() } as kotlin.jvm.functions.Function0<kotlin.Unit>,
                 CONTENT_DESCRIPTION,

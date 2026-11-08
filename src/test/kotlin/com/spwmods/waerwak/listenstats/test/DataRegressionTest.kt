@@ -8,6 +8,9 @@ import com.spwmods.waerwak.listenstats.stats.SessionTracker
 import com.spwmods.waerwak.listenstats.stats.StatsStore
 import com.spwmods.waerwak.listenstats.stats.StatsThresholds
 import com.spwmods.waerwak.listenstats.stats.TrackAgg
+import com.spwmods.waerwak.listenstats.ui.HostUiTargets
+import com.spwmods.waerwak.listenstats.ui.discovery.HostBytecodeIndex
+import com.spwmods.waerwak.listenstats.ui.discovery.HostUiDiscovery
 import com.xuncorp.spw.workshop.api.PlaybackExtensionPoint
 import java.io.File
 import java.time.ZoneId
@@ -608,6 +611,30 @@ fun main() {
             "关掉隐藏后应恢复 2 首"
         )
         MissingStore.clear()
+    }
+
+    test("宿主界面结构化发现与 1.19.3 目标一致") {
+        val jarPath = System.getProperty("spw.host.jar")
+        if (jarPath == null || !File(jarPath).isFile) {
+            println("    （跳过：未提供 -Dspw.host.jar）")
+        } else {
+            val started = System.currentTimeMillis()
+            val index = HostBytecodeIndex.read(File(jarPath).toPath())
+            val discovered = HostUiDiscovery.discover(index)
+            val elapsed = System.currentTimeMillis() - started
+            val golden = HostUiTargets.forVersion("1.19.3")
+            check(golden != null, "版本表应登记 1.19.3")
+            val t = discovered.targets
+            check(t.pageCaller == golden!!.pageCaller, "pageCaller 不一致：" + t.pageCaller + " != " + golden.pageCaller)
+            check(t.titlebarCaller == golden.titlebarCaller, "titlebarCaller 不一致：" + t.titlebarCaller + " != " + golden.titlebarCaller)
+            check(t.debugCaption == golden.debugCaption, "debugCaption 不一致：" + t.debugCaption + " != " + golden.debugCaption)
+            check(t.captionClass == golden.captionClass, "captionClass 不一致：" + t.captionClass + " != " + golden.captionClass)
+            check(t.debugCaptionMethod == golden.debugCaptionMethod, "debugCaptionMethod 不一致")
+            check(t.captionMethodName == golden.captionMethodName, "captionMethodName 不一致")
+            check(discovered.layer != null, "应能发现材质 Layer 位点")
+            check(elapsed < 30_000L, "扫描耗时过长：" + elapsed + "ms")
+            println("    （扫描 " + index.methods.size + " 个方法，用时 " + elapsed + "ms）")
+        }
     }
 
     println()

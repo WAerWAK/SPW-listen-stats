@@ -40,7 +40,8 @@ $HostJar = (Resolve-Path $HostJar).Path
 # 只看宿主侧命名空间
 # 注：kotlin/ 与 kotlinx/ 不参与校验 —— 多文件类 facade（CollectionsKt extends CollectionsKt__*）
 # 会让 javap 看起来“没有这个方法”，属于误报，且 stdlib 不可能被裁剪
-$hostPrefixes = @('androidx/', 'com/xuncorp/', 'org/pf4j/')
+# net/bytebuddy/ 是宿主自带的（重定位过的）ASM：结构化发现要用，也是宿主运行时的类
+$hostPrefixes = @('androidx/', 'com/xuncorp/', 'org/pf4j/', 'net/bytebuddy/')
 
 $refsByOwner = @{}
 $pluginClasses = Get-ChildItem -Path $PluginDir -Recurse -Filter *.class

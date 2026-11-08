@@ -9,6 +9,16 @@ package com.spwmods.waerwak.listenstats.ui
  *
  * 参考 Jethuit/SPW-Listen-Stats 的 HostUiTargets 做法。
  */
+
+/** 宿主 caption button 组件类（1.19.1+ 复用模式下反射调用它） */
+internal const val DEFAULT_CAPTION_CLASS = "com.xuncorp.voxzen.ui.component.\u0529"
+
+/** DebugCaptionButton 模板的方法名（标题栏 hook 的 methodName） */
+internal const val DEFAULT_CAPTION_METHOD = "\u037f"
+
+/** 宿主 caption button 组件里"带图标槽位宽度"的那个重载的方法名 */
+internal const val DEFAULT_CAPTION_OVERLOAD_METHOD = "\u037f"
+
 data class HostUiTargets(
     /** AppNavigation 调用点：面板 + 材质桥接层的 inClass */
     val pageCaller: String,
@@ -22,7 +32,13 @@ data class HostUiTargets(
      * 1.19.1 起宿主标题栏容器只接受原生 caption button（拼接自绘组件会被排到行首），
      * 所以必须反射调用宿主组件；1.19.0 的自绘方案在原位置可用，保持老路径。
      */
-    val reuseHostCaption: Boolean
+    val reuseHostCaption: Boolean,
+    /** 宿主 caption button 组件类（版本表默认值；结构化发现会给出实测值） */
+    val captionClass: String = DEFAULT_CAPTION_CLASS,
+    /** 标题栏 DebugCaptionButton 模板的方法名（结构化发现会给出实测值） */
+    val debugCaptionMethod: String = DEFAULT_CAPTION_METHOD,
+    /** caption button 组件里带图标槽位宽度的重载方法名（反射调用用） */
+    val captionMethodName: String = DEFAULT_CAPTION_OVERLOAD_METHOD
 ) {
     companion object {
 
