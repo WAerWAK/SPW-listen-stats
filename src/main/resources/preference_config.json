@@ -20,15 +20,15 @@
         },
         {
           "type": "button",
-          "title": "恢复数据",
-          "summary": "从备份 zip 恢复（原数据会改名为 .bak 保留）",
+          "title": "恢复数据-覆盖当前",
+          "summary": "用备份完整替换当前统计（原数据会改名为 .bak 保留）",
           "arrow_type": "link",
           "on_click": "com.spwmods.waerwak.listenstats.StatsActions.restoreDataDialog"
         },
         {
           "type": "button",
-          "title": "合并导入备份",
-          "summary": "把另一份备份里的播放明细并入当前统计（按会话去重，可重复导入）",
+          "title": "恢复数据-合并当前",
+          "summary": "保留现有统计，把备份里的播放明细并进来（按会话去重，可重复导入）",
           "arrow_type": "link",
           "on_click": "com.spwmods.waerwak.listenstats.StatsActions.mergeImportDialog"
         },

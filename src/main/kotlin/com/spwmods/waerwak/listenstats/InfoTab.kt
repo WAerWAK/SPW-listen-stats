@@ -185,7 +185,7 @@ internal fun InfoTab(
                     RowDivider()
                     val hmsRanking = remember { mutableStateOf(com.spwmods.waerwak.listenstats.ui.UiStateStore.loadDurationHmsRanking()) }
                     AdjustableRow(
-                        label = "时长显示",
+                        label = "排行页时长显示格式",
                         value = if (hmsRanking.value) "1:23:45" else "1 小时 23 分",
                         onClick = {
                             val next = !hmsRanking.value
