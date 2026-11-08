@@ -5,8 +5,8 @@
 <h1 align="center">听歌统计 · Salt Player for Windows 插件</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC-v1.4.12-8B5CF6?labelColor=1F2937" alt="最新版本">
-  <img src="https://img.shields.io/badge/SPW-1.19.1-3B82F6?labelColor=1F2937" alt="SPW 版本">
+  <img src="https://img.shields.io/badge/%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC-v1.5.0-8B5CF6?labelColor=1F2937" alt="最新版本">
+  <img src="https://img.shields.io/badge/SPW-1.19.3-3B82F6?labelColor=1F2937" alt="SPW 版本">
   <img src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows-0EA5E9?labelColor=1F2937" alt="平台">
   <img src="https://img.shields.io/badge/license-Apache--2.0-22C55E?labelColor=1F2937" alt="许可证">
 </p>
@@ -33,25 +33,25 @@
 
 ### 排行
 
-总榜 / 月榜 / 周榜 × 歌曲 / 专辑 / 艺术家 × 次数 / 时长 / 最近；列表显示封面与上次播放时间，**支持按歌曲 / 歌手 / 专辑搜索（含中文输入）**；点歌曲、专辑或艺术家都可以打开各自的详情弹窗（10 条/页，可调 10–50）。文件已删除或移走的曲目会打上「缺失」标签（专辑 / 艺术家行显示「部分缺失」「全部缺失」）。
+总榜 / 月榜 / 周榜 × 歌曲 / 专辑 / 艺术家 × 次数 / 时长 / 最近；列表显示封面与上次播放时间，时长可在「信息 → 显示 → 时长显示」里切换成 `1 小时 23 分` 或 `1:23:45`；**支持按歌曲 / 歌手 / 专辑搜索（含中文输入）**；点歌曲、专辑或艺术家都可以打开各自的详情弹窗（10 条/页，可调 10–50）。文件已删除或移走的曲目会打上「缺失」标签（专辑 / 艺术家行显示「部分缺失」「全部缺失」）。
 
 <img src="docs/screenshots/ranking.png" width="100%" alt="排行页">
 
 ### 活跃度
 
-GitHub 风格年度热力图（可切换近一年 / 具体年份，悬浮显示当天详情，点击看明细），以及时长分布图（柱状 / 折线 / 曲线，今天 / 近 7 天 / 近 30 天 / 本月 / 本年 / 自定义，自动推断粒度，带纵轴刻度与平均线）。
+GitHub 风格年度热力图（可切换近一年 / 具体年份，悬浮显示当天详情；色阶按近 12 个月的收听分布分档，切年份颜色不跳变；单击某天让下方图表切到那天，再点同一格看当天明细），以及时长分布图（柱状 / 折线 / 曲线，今天 / 近 7 天 / 近 30 天 / 本月 / 本年 / 自定义，自动推断粒度，带纵轴刻度与平均线；**点任意柱子或折线上的点可看该时段的歌曲明细**）。
 
 <img src="docs/screenshots/activity.png" width="100%" alt="活跃度页">
 
 ### 信息
 
-插件与宿主环境、采集状态、数据占用、权限状态、运行诊断；可调整计数门槛、明细保留天数、字体大小（0–60%）、内容宽度上限，以及对缺失曲目做一次检测、开关缺失曲目的显示。
+插件与宿主环境、采集状态、数据占用、权限状态、运行诊断（含计时诊断与数据读取状态）；可调整计数门槛、明细保留天数、字体大小（0–60%）、内容宽度上限、时长显示格式，以及对缺失曲目做一次检测、开关缺失曲目的显示；还包含作者、开源许可与 GitHub / 创意工坊入口、数据目录一键复制。
 
 <img src="docs/screenshots/info.png" width="100%" alt="信息页">
 
 ### 模组管理页
 
-导出 CSV、备份 / 恢复、清空统计，以及悬浮按钮与顶栏按钮的安装 / 卸载。
+导出 CSV、备份 / 恢复、**合并导入**（把另一份备份的记录并进来，重复导入不会重复计数）、清空统计，以及悬浮按钮与顶栏按钮的安装 / 卸载。
 
 <img src="docs/screenshots/config.png" width="100%" alt="模组管理页">
 
@@ -62,7 +62,7 @@ GitHub 风格年度热力图（可切换近一年 / 具体年份，悬浮显示�
 ### 采集规则
 
 - 一遍播放的边界：换曲、停止/结束、已计数后又回到开头
-- 有效时长 = `min(位置增量, 墙钟增量)` —— 暂停、卡顿、拖进度条都不会虚增
+- 有效时长按**真实经过的时间**累积，并用播放器位置确认「确实在推进」：暂停、缓冲、拖进度条都不会虚增，也不会因为播放器回调频率变化而少记
 - **计数门槛可自定义**：最少秒数 与「曲目时长 × 百分比」之间取较大 / 较小（默认 30 秒 / 50% / 取较小）
 - 未达门槛的一遍记作「跳过」
 
@@ -123,7 +123,8 @@ com.spwmods.waerwak.listenstats
 |---|---|
 | 导出 CSV | 弹出保存对话框，导出曲目汇总表（UTF-8 BOM，Excel 可直接打开） |
 | 备份数据 | 打包为 zip（字典 + 聚合 + 明细 + 配置 + 面板状态） |
-| 恢复数据 | 先显示备份摘要，确认后从 zip 恢复（现有数据改名 `.bak` 保留） |
+| 恢复数据 | 先显示备份摘要，确认后从 zip 恢复（现有数据改名 `.bak` 保留；备份带校验和，损坏会被拒绝） |
+| 合并导入备份 | 把另一份备份里的播放明细并入当前统计（按会话去重，可重复导入；不会删除现有记录） |
 | 清空统计 | 内存清零，数据文件改名 `.bak`（可恢复） |
 | 悬浮按钮-安装 / 卸载 | 显示 / 仅隐藏右下角圆钮（不影响顶栏按钮与面板） |
 | 顶栏按钮-安装 / 卸载 | 添加 / 移除标题栏的统计入口 |
@@ -146,7 +147,8 @@ com.spwmods.waerwak.listenstats
 
 ## 已知限制
 
-- 无云端同步，跨设备请用「备份数据 / 恢复数据」
+- 无云端同步，跨设备请用「备份数据 / 合并导入备份」
+- 时长口径：暂停与缓冲不计入、倍速按实际经过的时间记录（与宿主自带统计一致）；播放中途才启用插件也不会漏记（1.5.0 起）
 
 ---
 
@@ -159,21 +161,22 @@ com.spwmods.waerwak.listenstats
    cp gradle.properties.example gradle.properties
    ```
    把 `spwHostJar` 指向本机 SPW 安装目录下的 fat jar（Steam 版是 `app/ffmpeg-x64.dll`）。
-2. 生成编译桩（SPW 1.19.1 起宿主把 `META-INF/runtime.kotlin_module` 清成空壳，缺少它源码无法编译）：
+2. 部署前可先跑 `gradle probeHookTargets` 离线校验界面注入点（不启动 SPW）
+3. 生成编译桩（SPW 1.19.1 起宿主把 `META-INF/runtime.kotlin_module` 清成空壳，缺少它源码无法编译）：
    ```bash
    python tools/gen-runtime-module-patch.py
    ```
    产出 `libs/runtime-module-patch.jar`，只参与编译（`compileOnly`），不打包进插件。宿主以后修好该文件即可删掉此步。
-3. 构建：
+4. 构建：
    ```bash
    gradle build
    ```
-4. 产物：`build/libs/plugin-com.spwmods.waerwak.listenstats-<version>.spmod`
+5. 产物：`build/libs/plugin-com.spwmods.waerwak.listenstats-<version>.spmod`
 
 一键部署（开发用，会重启 SPW）：
 
 ```powershell
-pwsh -File tools/deploy.ps1 -SpmodPath build/libs/plugin-com.spwmods.waerwak.listenstats-1.4.12.spmod
+pwsh -File tools/deploy.ps1 -SpmodPath build/libs/plugin-com.spwmods.waerwak.listenstats-1.5.0.spmod
 ```
 
 ---
@@ -193,7 +196,10 @@ src/main/kotlin/com/spwmods/waerwak/listenstats/
 ├── RankingTab.kt               排行页（搜索 / 排序 / 范围）
 ├── CalendarTab.kt              活跃度页（年份选择 / 热力图 / 时长分布）
 ├── Heatmap.kt                  热力图渲染与色阶
-├── DurationChart.kt            时长分布图（柱 / 折线 / 曲线）
+├── DurationChart.kt            时长分布图（柱 / 折线 / 曲线，单 Canvas 绘制）
+├── RangeDetailPanel.kt         图表时段明细弹窗
+├── ui/BackgroundDialogs.kt     文件对话框 + 后台磁盘 I/O
+├── ui/discovery/               宿主界面注入点的结构化发现（ASM）
 ├── InfoTab.kt                  信息页（环境 / 权限 / 诊断 / 门槛设置）
 ├── stats/
 │   ├── SessionTracker.kt       一遍播放状态机（次数/时长/跳过）

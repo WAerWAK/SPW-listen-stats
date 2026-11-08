@@ -184,13 +184,14 @@ internal fun InfoTab(
                     }
                     RowDivider()
                     val hmsRanking = remember { mutableStateOf(com.spwmods.waerwak.listenstats.ui.UiStateStore.loadDurationHmsRanking()) }
-                    ToggleRow(
-                        label = "榜单时长用 h:mm:ss",
-                        checked = hmsRanking.value,
-                        onToggle = { hms ->
-                            hmsRanking.value = hms
-                            OverlayInjection.hmsRanking.value = hms
-                            com.spwmods.waerwak.listenstats.ui.UiStateStore.saveDurationHmsRanking(hms)
+                    AdjustableRow(
+                        label = "时长显示",
+                        value = if (hmsRanking.value) "1:23:45" else "1 小时 23 分",
+                        onClick = {
+                            val next = !hmsRanking.value
+                            hmsRanking.value = next
+                            OverlayInjection.hmsRanking.value = next
+                            com.spwmods.waerwak.listenstats.ui.UiStateStore.saveDurationHmsRanking(next)
                         }
                     )
                     RowDivider()

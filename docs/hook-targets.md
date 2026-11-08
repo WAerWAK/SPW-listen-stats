@@ -30,13 +30,19 @@
 | 标题栏行 (inClass) | `androidx.compose.ui.ઈ`（`\u0a88`） |
 | 标题栏模板 (className) | `androidx.compose.ui.ݕ`（`\u0755`），方法名 `Ϳ`（`\u037f`） |
 | caption 控件 | `com.xuncorp.voxzen.ui.component.ԩ`（`\u0529`），10 参 `Ϳ` |
-| 材质 Layer | `androidx.compose.ui.ՙ.Ϳ(Modifier,Z,Function3,Composer,II)V`（`\u0559`），caller = 面板调用点 |
+| 材质 Layer | `androidx.compose.ui.ՙ.Ϳ(Modifier,Z,Function3,Composer,II)V`（`\u0559`），caller = 面板调用点（**已实现但默认关闭**，见下） |
 | 导航 hook | `Navigator` / `navigate` / `replace` / `forward` / `back` 未变 |
 
 `hook-diag.txt` 成功样本：
 
     resolve  source=scan  page=androidx.compose.ui.Ɏ  titlebar=androidx.compose.ui.ઈ  caption=androidx.compose.ui.ݕ  classes=69704 path=…\ffmpeg-x64.dll
     install  ok handle=true layer=true nav=true titlebar=true titlebarErr=-
+
+> **Layer 点位为什么默认关闭**：包住宿主 Layer 后，我们的面板会被放到窗口原点（盖住顶栏），
+> 且隐藏宿主内容会连侧栏/顶栏一起隐藏；旧点位（替换 `AppNavigation` 调用点）才能让面板落在内容区。
+> 代码（`HostLayerStage` / `resolveLayerMethod`）与发现结果（`resolved.layer`）都保留，
+> 打开开关是 `OverlayInjection.USE_LAYER_INJECTION`。重新打开前需要先解决"只隐藏在内容区"的方案，
+> 并和"多插件共存"一起验证。
 
 ## 3. 历史目标（版本表回退用）
 
