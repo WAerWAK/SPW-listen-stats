@@ -39,6 +39,19 @@ object OverlayInjection {
     private const val TARGET_CLASS = "com.xuncorp.voxzen.ui.navigation.AppNavigationKt"
     private const val TARGET_METHOD = "AppNavigation"
 
+    /**
+     * 是否用"包住宿主 Layer"的方式注入（B2 方案）
+     *
+     * 暂时关闭，原因（1.4.15 实测）：
+     * - 面板位置会跑偏：Layer 的 content 铺满整个窗口，包住它之后我们的面板被放在窗口原点，
+     *   于是顶栏被"刷新"按钮盖住；而旧方案里面板是插在 AppNavigation 的调用点上，天然落在内容区
+     *   （侧栏右侧、顶栏下方）。
+     * - 隐藏宿主内容也会连带隐藏侧栏与顶栏，而旧方案只隐藏导航内容，外观才是对的。
+     * 代码与结构判据都保留（HostLayerStage / resolveLayerMethod / resolved.layer），
+     * 等找到"只隐藏在内容区、且面板落在内容区"的组合方式后再打开。
+     */
+    private const val USE_LAYER_INJECTION = false
+
 
     @Volatile
     private var handle: HookHandle? = null
@@ -278,7 +291,7 @@ object OverlayInjection {
         )
         return try {
             // 首选：包住宿主 Layer（不与其它插件抢 AppNavigation 的替换点）
-            val layerInstalled = installLayerIfPossible(resolved.layer)
+            val layerInstalled = if (USE_LAYER_INJECTION) installLayerIfPossible(resolved.layer) else false
             if (!layerInstalled) {
                 // 回退路径：afterComposable 装面板 + replaceComposable 装材质层
                 handle = WorkshopApi.hookRegistrar.afterComposable(

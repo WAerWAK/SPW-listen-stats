@@ -13,7 +13,12 @@ import java.util.concurrent.Executors
  *  - 已经计过数后又回到开头（单曲循环 / 手动重播）
  *  - seek 到开头且已计数
  *
- * 有效时长 = min(位置增量, 墙钟增量)，因此暂停、卡顿、拖进度条都不会虚增。
+ * 有效时长记的是**单调时钟增量**，位置只用来确认"确实在推进"：
+ *  - 位置没推进（暂停 / 缓冲 / 重复回调）、或推进幅度比经过的时间快太多（拖进度条、跳转）→ 整步丢弃；
+ *  - 采样停摆超过 MAX_STEP_MS、或位置跳变超过 4 倍容差 → 整步丢弃；
+ *  - 基准（lastPosition / lastNano）在**判定之后**才提交，被丢弃的步进不会吃掉下一段的墙钟。
+ *
+ * 这样既不会被暂停/卡顿虚增，也不会因为宿主位置回调变密（位置粒度粗于回调）而按比例少记。
  *
  * 刻意不用 Kotlin inline 集合/作用域函数（also/ifBlank/minOf…）：
  * Kotlin 2.4.21 + Compose 插件 + in-process 编译下它们会触发后端 codegen 崩溃。
@@ -22,7 +27,15 @@ object SessionTracker {
 
     private const val BACK_JUMP_TOLERANCE_MS = 3_000L
     private const val RESTART_POSITION_MS = 3_000L
+
+    /** 单步可接受的最大墙钟跨度：超过说明采样停摆（切后台/休眠/线程被卡），整段丢弃 */
     private const val MAX_STEP_MS = 15_000L
+
+    /** 位置推进的容差倍数：允许 1–4 倍速播放，超过视为拖进度条/跳转 */
+    private const val STEP_TOLERANCE_FACTOR = 4L
+
+    /** 容差的绝对下限（回调间隔很短时避免误杀正常播放） */
+    private const val STEP_TOLERANCE_FLOOR_MS = 3_000L
 
     private class Meta(
         val id: String,
@@ -36,7 +49,7 @@ object SessionTracker {
     private class Session(val key: String, var meta: Meta) {
         var listenedMs: Long = 0L
         var lastPosition: Long = -1L
-        var lastWallNanos: Long = 0L
+        var lastNano: Long = 0L
         var counted: Boolean = false
         var durationMs: Long = 0L
         /** 本遍的近似开始时间（崩溃恢复时用来还原时间位置） */
@@ -44,7 +57,14 @@ object SessionTracker {
     }
 
     private var session: Session? = null
-    private var playing: Boolean = false
+
+    /**
+     * 播放态：null = 还没收到过明确状态
+     *
+     * 宿主不提供查询接口，注册扩展时也不会补发当前状态 —— 播放中途启用/热重载插件时，
+     * 如果死等 onIsPlayingChanged(true)，这一遍会整段不记。所以 null 时允许由"位置确实在推进"建立播放态。
+     */
+    private var playing: Boolean? = null
 
     /**
      * 时间源（可注入，供回归测试用假时钟）
@@ -59,7 +79,7 @@ object SessionTracker {
     @Synchronized
     internal fun resetForTesting() {
         session = null
-        playing = false
+        playing = null
         nanoClock = { System.nanoTime() }
         wallClock = { System.currentTimeMillis() }
     }
@@ -102,7 +122,7 @@ object SessionTracker {
         }
 
         val fresh = Session(key, meta)
-        fresh.lastWallNanos = nanoClock()
+        fresh.lastNano = nanoClock()
         fresh.startTimeMs = wallClock()
         session = fresh
         if (item.id.isNotBlank()) requestDuration(key, item.id)
@@ -121,41 +141,53 @@ object SessionTracker {
         val current = session ?: return null
         val now = nanoClock()
         val last = current.lastPosition
-        val lastWall = current.lastWallNanos
+        val lastNano = current.lastNano
 
-        if (last < 0L) {
+        // 首帧 / 刚建立基准：只记录基准，不计数（插件可能是播放中途才启用的）
+        if (last < 0L || lastNano <= 0L) {
             current.lastPosition = position
-            current.lastWallNanos = now
+            current.lastNano = now
             return null
         }
 
-        if (position < last - BACK_JUMP_TOLERANCE_MS) {
+        val delta = position - last
+        val elapsed = (now - lastNano) / 1_000_000L
+
+        // 大幅回退（拖回开头 / 单曲循环 / 宿主重置位置）：已计过数就结算这一遍
+        if (delta < -BACK_JUMP_TOLERANCE_MS) {
+            current.lastPosition = position
+            current.lastNano = now
             if (current.counted) {
                 persistFinished(current)
                 current.listenedMs = 0L
                 current.counted = false
             }
-            current.lastPosition = position
-            current.lastWallNanos = now
             return null
         }
 
-        val positionDelta = position - last
-        val wallDelta = if (lastWall > 0L) (now - lastWall) / 1_000_000L else -1L
-        current.lastPosition = position
-        current.lastWallNanos = now
+        // 位置没推进（暂停 / 缓冲 / 重复回调）：**不动基准**。
+        // 若在这里提交墙钟基准，宿主位置粒度比回调粗时会按比例少记（每秒只记最后一次回调的间隔）。
+        if (delta == 0L) return null
 
-        if (!playing) return null
-        if (positionDelta < 1L || positionDelta > MAX_STEP_MS) return null
+        // 位置在动但数据不可信（停摆过久 / 幅度超过容差 = 拖进度条、跳转）：重建基准，不计数
+        if (elapsed < 0L || elapsed > MAX_STEP_MS || !withinStepTolerance(delta, elapsed) || playing == false) {
+            current.lastPosition = position
+            current.lastNano = now
+            return null
+        }
 
-        val effective = if (wallDelta >= 0L && wallDelta < positionDelta) wallDelta else positionDelta
-        if (effective <= 0L) return null
+        // 位置确实在推进 → 建立播放态（宿主不会在注册时补发状态）
+        if (playing == null) playing = true
 
-        current.listenedMs += effective
+        // 记的是经过的时间，位置只作证据：宿主位置粒度比回调粗时也不会少记
+        current.listenedMs += elapsed
         if (!current.counted) {
             val threshold = StatsThresholds.countThreshold(current.durationMs)
             if (current.listenedMs >= threshold) current.counted = true
         }
+
+        current.lastPosition = position
+        current.lastNano = now
         // 调用方在锁外写盘（进程被强杀时最多丢 10 秒）
         return LiveSessionStore.Snapshot(
             startTimeMs = current.startTimeMs,
@@ -171,6 +203,18 @@ object SessionTracker {
         )
     }
 
+    /**
+     * 位置推进幅度是否可信
+     *
+     * 允许 1–4 倍速（位置比时间快）；超过说明是拖进度条或跳转，不能算作正常播放。
+     */
+    private fun withinStepTolerance(delta: Long, elapsed: Long): Boolean {
+        if (delta < 1L) return false
+        val tolerance = elapsed * STEP_TOLERANCE_FACTOR + 250L
+        val maxDelta = if (tolerance > STEP_TOLERANCE_FLOOR_MS) tolerance else STEP_TOLERANCE_FLOOR_MS
+        return delta <= maxDelta
+    }
+
     @Synchronized
     fun onSeek(position: Long) {
         val current = session ?: return
@@ -179,16 +223,18 @@ object SessionTracker {
             current.listenedMs = 0L
             current.counted = false
         }
+        // seek 之后下一帧只重建基准，不把跳过的这段算成收听
         current.lastPosition = position
-        current.lastWallNanos = nanoClock()
+        current.lastNano = nanoClock()
     }
 
     @Synchronized
     fun onPlayingChanged(isPlaying: Boolean) {
         playing = isPlaying
         val current = session ?: return
-        // 恢复播放时重置墙钟基准，避免把暂停期间的时间补进时长
-        current.lastWallNanos = if (isPlaying) nanoClock() else 0L
+        // 播放/暂停切换时重建基准：暂停期间的时间不能补进时长
+        current.lastPosition = -1L
+        current.lastNano = 0L
     }
 
     fun onState(state: PlaybackExtensionPoint.State) {
@@ -196,7 +242,19 @@ object SessionTracker {
             state == PlaybackExtensionPoint.State.Ended
         ) {
             flush()
+            return
         }
+        // 缓冲时挂起采样：位置可能停住或回跳，这一段不算收听
+        if (state == PlaybackExtensionPoint.State.Buffering) {
+            suspendCurrentBaseline()
+        }
+    }
+
+    @Synchronized
+    private fun suspendCurrentBaseline() {
+        val current = session ?: return
+        current.lastPosition = -1L
+        current.lastNano = 0L
     }
 
     /** 结算当前一遍（换曲 / 停止 / 插件停用） */

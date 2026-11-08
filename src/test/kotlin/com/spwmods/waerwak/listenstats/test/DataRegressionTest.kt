@@ -637,6 +637,70 @@ fun main() {
         }
     }
 
+    test("位置粒度粗于回调频率时不少记") {
+        freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 0)
+        val item = track("dense", durationMs = 5 * MINUTE)
+        SessionTracker.onTrack(item)
+        SessionTracker.onPlayingChanged(true)
+        // 宿主：位置按 1 秒粒度跳变，但 onPositionUpdated 每 400ms 回调一次
+        var i = 0
+        while (i < 150) {
+            advance(400L)
+            val pos = ((i + 1) * 400L) / 1000L * 1000L
+            SessionTracker.onPosition(pos)
+            i++
+        }
+        SessionTracker.flush()
+        val agg = findTrack("dense")
+        check(agg != null, "应该有记录")
+        checkNear(agg!!.listenedMs, 60 * SECOND, 3 * SECOND, "高频回调不应按比例少记")
+    }
+
+    test("曲中启用插件也能记满") {
+        freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 0)
+        val item = track("midenable", durationMs = 5 * MINUTE)
+        SessionTracker.onTrack(item)
+        // 刻意不发 onPlayingChanged(true)：模拟播放中途启用 / 热重载（宿主不会补发状态）
+        playFor(item, 0L, 30 * SECOND)
+        SessionTracker.flush()
+        val agg = findTrack("midenable")
+        check(agg != null, "未收到播放状态也应记录")
+        checkNear(agg!!.listenedMs, 30 * SECOND, 3 * SECOND, "曲中启用应记满")
+    }
+
+    test("2 倍速按实际听音时间记") {
+        freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 0)
+        val item = track("speed", durationMs = 5 * MINUTE)
+        SessionTracker.onTrack(item)
+        SessionTracker.onPlayingChanged(true)
+        var i = 0
+        while (i < 30) {
+            advance(SECOND)
+            SessionTracker.onPosition((i + 1) * 2 * SECOND)
+            i++
+        }
+        SessionTracker.flush()
+        val agg = findTrack("speed")
+        check(agg != null, "应该有记录")
+        checkNear(agg!!.listenedMs, 30 * SECOND, 3 * SECOND, "倍速按墙钟记（30 秒真实时间）")
+    }
+
+    test("采样停摆超过上限时丢弃该段") {
+        freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 0)
+        val item = track("stall", durationMs = 10 * MINUTE)
+        SessionTracker.onTrack(item)
+        SessionTracker.onPlayingChanged(true)
+        playFor(item, 0L, 10 * SECOND)
+        // 位置照常前进，但 20 秒没有回调（切后台 / 线程被卡）
+        advance(20 * SECOND)
+        SessionTracker.onPosition(30 * SECOND)
+        playFor(item, 30 * SECOND, 10 * SECOND)
+        SessionTracker.flush()
+        val agg = findTrack("stall")
+        check(agg != null, "应该有记录")
+        checkNear(agg!!.listenedMs, 20 * SECOND, 3 * SECOND, "停摆的 20 秒不应计入")
+    }
+
     println()
     println("结果：通过 " + passed + " / 失败 " + failed)
     cleanup()
