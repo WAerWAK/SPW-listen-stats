@@ -171,6 +171,19 @@ object StatsStore {
     /** 备份目录内的元数据文件名 */
     private const val MANIFEST_FILE = "manifest.json"
 
+    /** 备份格式版本：2 起带 includes / sha256 */
+    private const val BACKUP_FORMAT = 2
+
+    /** 备份包安全上限（解压前校验，防止恶意/异常包撑爆磁盘） */
+    private const val MAX_BACKUP_ENTRIES = 5_000
+    private const val MAX_BACKUP_BYTES = 256L * 1024L * 1024L
+
+    /** 插件版本（写进 manifest，便于排查备份来源）；由 ListenStatsPlugin.start() 注入 */
+    @Volatile
+    var pluginVersionHint: String = ""
+
+    private class BackupEntry(val name: String, val file: File)
+
     /** 备份全部数据到 zip（**纯只读操作，不改动任何源文件，也不触发加载/迁移**） */
     @Synchronized
     fun backupTo(target: File): String {
@@ -194,42 +207,48 @@ object StatsStore {
         if (targetPath == dictPath) return "备份失败：不能覆盖数据文件"
         if (target.exists() && target.isDirectory) return "备份失败：目标是目录"
 
+        // 1) 收集条目（决定 includes 与校验和；顺序固定，保证同一份数据得到同一个 sha256）
+        val entries = ArrayList<BackupEntry>(16)
+        if (dictFile.isFile) entries.add(BackupEntry(DICT_FILE, dictFile))
+        collectBackupDir(entries, File(dir, DAILY_DIR), DAILY_DIR)
+        collectBackupDir(entries, File(dir, EVENTS_DIR), EVENTS_DIR)
+        for (extra in arrayOf("config.json", "ui-state.json", "missing.txt")) {
+            val f = File(dir, extra)
+            val fPath = try {
+                f.canonicalPath
+            } catch (t: Throwable) {
+                f.absolutePath
+            }
+            if (f.isFile && fPath != targetPath) entries.add(BackupEntry(extra, f))
+        }
+        if (entries.isEmpty()) return "没有可备份的数据"
+        entries.sortWith(Comparator { a, b -> a.name.compareTo(b.name) })
+        var digest = ""
+        try {
+            digest = backupDigest(entries)
+        } catch (t: Throwable) {
+            log("备份校验和计算失败：" + t.message)
+            return "备份失败：读取数据文件出错（" + t.message + "）"
+        }
+
+        // 2) 写包
         var zos: java.util.zip.ZipOutputStream? = null
         var written = 0
         var totalBytes = 0L
         try {
             zos = java.util.zip.ZipOutputStream(target.outputStream().buffered())
             // 先写 manifest：恢复时可以先展示备份内容摘要再确认
-            val manifest = buildManifest(dir)
+            val manifest = buildManifest(dir, entries, digest)
             zos.putNextEntry(java.util.zip.ZipEntry(MANIFEST_FILE))
             zos.write(manifest.toByteArray(Charsets.UTF_8))
             zos.closeEntry()
             written++
-            if (dictFile.isFile) {
-                writeEntry(zos, dictFile, DICT_FILE)
+            var i = 0
+            while (i < entries.size) {
+                writeEntry(zos, entries[i].file, entries[i].name)
                 written++
-                totalBytes += dictFile.length()
-            }
-            val dailyResult = writeDir(zos, File(dir, DAILY_DIR), DAILY_DIR, targetPath)
-            written += dailyResult[0].toInt()
-            totalBytes += dailyResult[1]
-            val eventsResult = writeDir(zos, File(dir, EVENTS_DIR), EVENTS_DIR, targetPath)
-            written += eventsResult[0].toInt()
-            totalBytes += eventsResult[1]
-            // 只带真正存在的附加文件：reset/restore 生成的备份名带时间戳，
-            // 固定名 "tracks.jsonl.bak" 几乎不可能存在，之前是无效项
-            for (extra in arrayOf("config.json", "ui-state.json")) {
-                val f = File(dir, extra)
-                val fPath = try {
-                    f.canonicalPath
-                } catch (t: Throwable) {
-                    f.absolutePath
-                }
-                if (f.isFile && fPath != targetPath) {
-                    writeEntry(zos, f, extra)
-                    written++
-                    totalBytes += f.length()
-                }
+                totalBytes += entries[i].file.length()
+                i++
             }
         } catch (t: Throwable) {
             closeQuietly(zos)
@@ -247,7 +266,7 @@ object StatsStore {
      *
      * 恢复前用它告诉用户「这个备份里有什么」，避免盲目覆盖现有数据。
      */
-    private fun buildManifest(dir: File): String {
+    private fun buildManifest(dir: File, entries: ArrayList<BackupEntry>, digest: String): String {
         var trackLines = 0
         try {
             val dict = File(dir, DICT_FILE)
@@ -284,9 +303,92 @@ object StatsStore {
             }
         }
         val now = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ROOT).format(Date())
-        return "{\"v\":1,\"exportedAt\":\"" + now + "\",\"tracks\":" + trackLines +
+        val zone = java.time.ZoneId.systemDefault().id
+        val version = if (pluginVersionHint.isEmpty()) "?" else pluginVersionHint
+        val includes = StringBuilder(128)
+        var i = 0
+        while (i < entries.size) {
+            if (i > 0) includes.append(',')
+            includes.append('"').append(JsonLite.escape(entries[i].name)).append('"')
+            i++
+        }
+        return "{\"format\":\"spw-listen-stats-backup\",\"v\":" + BACKUP_FORMAT +
+            ",\"exportedAt\":\"" + now + "\"" +
+            ",\"pluginVersion\":\"" + JsonLite.escape(version) + "\"" +
+            ",\"timeZone\":\"" + JsonLite.escape(zone) + "\"" +
+            ",\"tracks\":" + trackLines +
             ",\"dailyRows\":" + dayLines + ",\"events\":" + eventLines +
-            ",\"firstDay\":\"" + firstDay + "\",\"lastDay\":\"" + lastDay + "\"}"
+            ",\"firstDay\":\"" + firstDay + "\",\"lastDay\":\"" + lastDay + "\"" +
+            ",\"includes\":[" + includes + "]" +
+            ",\"sha256\":\"" + digest + "\"}"
+    }
+
+    /** 收集目录下的 .jsonl 条目（只收集一层，与备份写入保持一致） */
+    private fun collectBackupDir(out: ArrayList<BackupEntry>, dir: File, prefix: String) {
+        val files = dir.listFiles() ?: return
+        var i = 0
+        while (i < files.size) {
+            val f = files[i]
+            i++
+            if (!f.isFile) continue
+            if (!f.name.endsWith(".jsonl")) continue
+            out.add(BackupEntry(prefix + "/" + f.name, f))
+        }
+    }
+
+    /** 备份校验和：按条目名排序后，对「名字 + 大小 + 内容哈希」再哈希 */
+    private fun backupDigest(entries: ArrayList<BackupEntry>): String {
+        val master = java.security.MessageDigest.getInstance("SHA-256")
+        var i = 0
+        while (i < entries.size) {
+            val entry = entries[i]
+            val bytes = entry.file.readBytes()
+            val per = java.security.MessageDigest.getInstance("SHA-256")
+            per.update(bytes)
+            master.update(
+                (entry.name + "\u0000" + bytes.size + "\u0000" + hexOf(per.digest()) + "\n")
+                    .toByteArray(Charsets.UTF_8)
+            )
+            i++
+        }
+        return hexOf(master.digest())
+    }
+
+    private fun hexOf(bytes: ByteArray): String {
+        val sb = StringBuilder(bytes.size * 2)
+        var i = 0
+        while (i < bytes.size) {
+            val v = bytes[i].toInt() and 0xff
+            if (v < 16) sb.append('0')
+            sb.append(Integer.toHexString(v))
+            i++
+        }
+        return sb.toString()
+    }
+
+    private fun zipNames(zip: java.util.zip.ZipFile): ArrayList<String> {
+        val names = ArrayList<String>(32)
+        val enumeration = zip.entries()
+        while (enumeration.hasMoreElements()) {
+            val entry = enumeration.nextElement()
+            if (entry.isDirectory) continue
+            names.add(entry.name)
+        }
+        names.sortWith(Comparator { a, b -> a.compareTo(b) })
+        return names
+    }
+
+    /** 恢复白名单：只接受统计相关文件，其他一律拒绝（防止覆盖 config/live-session 之外的东西） */
+    private fun allowedBackupEntry(name: String): Boolean {
+        if (name == MANIFEST_FILE) return true
+        if (name == DICT_FILE) return true
+        if (name == "config.json" || name == "ui-state.json" || name == "missing.txt") return true
+        if (!name.endsWith(".jsonl")) return false
+        if (name.startsWith(DAILY_DIR + "/") || name.startsWith(EVENTS_DIR + "/")) {
+            val rest = name.substring(name.indexOf('/') + 1)
+            return rest.isNotEmpty() && rest.indexOf('/') < 0
+        }
+        return false
     }
 
     /** 读取备份的元数据摘要（不修改任何数据）；null 表示旧版备份没有 manifest */
@@ -393,6 +495,77 @@ object StatsStore {
         }
     }
 
+    /**
+     * 校验备份包（在改动任何数据之前）
+     *
+     * - 条目白名单 + 数量/解压体积上限
+     * - v2 起校验 sha256（防止文件被改坏/篡改）
+     * @return 错误文案；null 表示可以恢复
+     */
+    private fun validateBackup(source: File): String? {
+        var zip: java.util.zip.ZipFile? = null
+        try {
+            zip = java.util.zip.ZipFile(source)
+            val names = zipNames(zip)
+            if (names.isEmpty()) return "恢复失败：压缩包为空，未恢复任何数据"
+            if (names.size > MAX_BACKUP_ENTRIES) return "恢复失败：备份条目过多（" + names.size + " 个）"
+            var i = 0
+            while (i < names.size) {
+                val name = names[i]
+                i++
+                if (name == MANIFEST_FILE) continue
+                if (!allowedBackupEntry(name)) return "恢复失败：备份包含不允许的条目：" + name
+            }
+            val manifestEntry = zip.getEntry(MANIFEST_FILE)
+            var expectSha = ""
+            if (manifestEntry != null) {
+                val manifestText = String(zip.getInputStream(manifestEntry).readBytes(), Charsets.UTF_8)
+                val format = JsonLite.string(manifestText, "format")
+                if (format.isNotEmpty() && format != "spw-listen-stats-backup") {
+                    return "恢复失败：不认识的备份格式：" + format
+                }
+                val version = JsonLite.long(manifestText, "v")
+                if (version > BACKUP_FORMAT) {
+                    return "恢复失败：备份来自更新版本的插件（v" + version + "），请先升级插件再恢复"
+                }
+                expectSha = JsonLite.string(manifestText, "sha256")
+            }
+            // 逐个条目累计体积/校验和（与备份时相同的排序与算法）
+            val master = java.security.MessageDigest.getInstance("SHA-256")
+            var total = 0L
+            i = 0
+            while (i < names.size) {
+                val name = names[i]
+                i++
+                if (name == MANIFEST_FILE) continue
+                val entry = zip.getEntry(name) ?: continue
+                val bytes = zip.getInputStream(entry).readBytes()
+                total += bytes.size
+                if (total > MAX_BACKUP_BYTES) {
+                    return "恢复失败：备份解压后超过 " + (MAX_BACKUP_BYTES / 1024L / 1024L) + " MB"
+                }
+                val per = java.security.MessageDigest.getInstance("SHA-256")
+                per.update(bytes)
+                master.update(
+                    (name + "\u0000" + bytes.size + "\u0000" + hexOf(per.digest()) + "\n")
+                        .toByteArray(Charsets.UTF_8)
+                )
+            }
+            if (expectSha.isNotEmpty() && hexOf(master.digest()) != expectSha) {
+                return "恢复失败：备份校验和不匹配（文件可能被修改或损坏）"
+            }
+            return null
+        } catch (t: Throwable) {
+            return "恢复失败：备份包损坏：" + (t.message ?: t.javaClass.simpleName)
+        } finally {
+            try {
+                zip?.close()
+            } catch (t: Throwable) {
+                // 忽略
+            }
+        }
+    }
+
     /** 从 zip 恢复（现有数据先改名保留为 backup-时间戳） */
     @Synchronized
     fun restoreFrom(source: File): String {
@@ -400,6 +573,9 @@ object StatsStore {
         val dir = dataDir ?: return "没有数据目录"
         // 排队中的写入先落地，否则解压后又被追加旧行
         drainIo()
+        // 0) 先校验：不合法的包在改动任何数据之前就拒绝
+        val invalid = validateBackup(source)
+        if (invalid != null) return invalid
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(Date())
         var restored = 0
         // 1) 先备份现有数据（改名，不删除）；记录改名清单，失败时回滚
@@ -416,20 +592,19 @@ object StatsStore {
                 if (d.renameTo(bak)) renamed.add(Pair(bak, d))
             }
         }
-        // 2) 解压（记录写出的文件，失败时删掉并回滚 .bak）
+        // 2) 解压（ZipFile 随机读：条目顺序不影响结果；记录写出的文件，失败时删掉并回滚 .bak）
         val written = ArrayList<File>(32)
         var writeFailed = false
-        var zis: java.util.zip.ZipInputStream? = null
+        var zip: java.util.zip.ZipFile? = null
         try {
-            zis = java.util.zip.ZipInputStream(source.inputStream().buffered())
-            val buf = ByteArray(8192)
-            while (true) {
-                val entry = zis.nextEntry ?: break
-                val name = entry.name
-                if (entry.isDirectory || name.isEmpty()) {
-                    zis.closeEntry()
-                    continue
-                }
+            zip = java.util.zip.ZipFile(source)
+            val names = zipNames(zip)
+            var i = 0
+            while (i < names.size) {
+                val name = names[i]
+                i++
+                if (name == MANIFEST_FILE) continue
+                val entry = zip.getEntry(name) ?: continue
                 val target = File(dir, name)
                 // 防 zip slip：entry 名可能是 "../xxx"，解析后必须仍落在数据目录内
                 val basePath = try {
@@ -444,24 +619,25 @@ object StatsStore {
                 }
                 if (targetPath.isEmpty() || !targetPath.startsWith(basePath)) {
                     System.err.println("[listen-stats] 跳过非法备份条目: " + name)
-                    zis.closeEntry()
                     continue
                 }
                 val parent = target.parentFile
                 if (parent != null) parent.mkdirs()
+                val input = zip.getInputStream(entry)
                 val out = target.outputStream().buffered()
                 var failed = false
                 try {
+                    val buffer = ByteArray(8192)
                     while (true) {
-                        val n = zis.read(buf)
+                        val n = input.read(buffer)
                         if (n <= 0) break
-                        out.write(buf, 0, n)
+                        out.write(buffer, 0, n)
                     }
                 } catch (t: Throwable) {
                     failed = true
                 }
                 out.close()
-                zis.closeEntry()
+                input.close()
                 if (failed) {
                     writeFailed = true
                     break
@@ -471,7 +647,7 @@ object StatsStore {
             }
         } catch (t: Throwable) {
             try {
-                if (zis != null) zis.close()
+                zip?.close()
             } catch (e: Throwable) {
                 // 忽略
             }
@@ -479,7 +655,7 @@ object StatsStore {
             return "恢复失败：" + t.message
         }
         try {
-            zis.close()
+            zip?.close()
         } catch (e: Throwable) {
             // 忽略
         }
@@ -496,8 +672,19 @@ object StatsStore {
         totalMs = 0L
         replayedLines = 0
         loaded = false
+        // 4) 派生状态必须重建：缺失检测与内存封面都是按"原来的曲库"算的
+        try {
+            MissingStore.clear()
+        } catch (t: Throwable) {
+            System.err.println("[listen-stats] 恢复后清空缺失记录失败: " + t.message)
+        }
+        try {
+            com.spwmods.waerwak.listenstats.ui.CoverCache.clearMemory()
+        } catch (t: Throwable) {
+            System.err.println("[listen-stats] 恢复后清空封面缓存失败: " + t.message)
+        }
         dataVersion++
-        return "已恢复 " + restored + " 个文件（原数据已改名为 .bak 保留）"
+        return "已恢复 " + restored + " 个文件（原数据已改名为 .bak 保留；缺失检测已重置，可重新检测）"
     }
 
     /**

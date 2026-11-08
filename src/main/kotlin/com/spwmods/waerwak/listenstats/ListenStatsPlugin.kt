@@ -23,6 +23,8 @@ class ListenStatsPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext)
     override fun start() {
         SessionTracker.resetDiagnostics()
         HostProbe.attach(pluginContext)
+        // 备份 manifest 里记录插件版本（排查备份来源用）
+        com.spwmods.waerwak.listenstats.stats.StatsStore.pluginVersionHint = pluginContext.pluginVersion
         HostProbe.logStartup()
 
         // 把上次未结算的播放会话补记回统计（崩溃/强杀保护）

@@ -763,6 +763,92 @@ fun main() {
         check(com.spwmods.waerwak.listenstats.formatMsPrecise(59_400L) == "59 秒", "不足 1 分钟只显示秒")
     }
 
+    test("备份 v2 带校验和、包含缺失记录，恢复后重置缺失检测") {
+        val dir = freshEnv()
+        val item = track("backup-v2", title = "备份测试")
+        SessionTracker.onTrack(item)
+        SessionTracker.onPlayingChanged(true)
+        playFor(item, 0L, 40 * SECOND)
+        SessionTracker.flush()
+        Thread.sleep(300L)
+        MissingStore.attach(dir)
+        MissingStore.setResult(setOf("hex-miss"), setOf("id-miss"), 1_700_000_000_000L)
+        check(MissingStore.count() == 1, "准备：应有一条缺失记录")
+
+        val backup = File(dir, "backup-v2.zip")
+        val message = StatsStore.backupTo(backup)
+        check(message.startsWith("已备份"), "备份应成功，实际：" + message)
+        val manifest = StatsStore.inspectBackup(backup)
+        check(manifest != null, "应有 manifest")
+        check(manifest!!.contains("\"format\":\"spw-listen-stats-backup\""), "manifest 应有 format：" + manifest)
+        check(manifest.contains("\"v\":2"), "manifest 应为 v2")
+        check(manifest.contains("\"sha256\":\""), "manifest 应有 sha256")
+        check(manifest.contains("missing.txt"), "includes 应包含 missing.txt")
+
+        val restored = StatsStore.restoreFrom(backup)
+        check(restored.startsWith("已恢复"), "恢复应成功，实际：" + restored)
+        check(MissingStore.count() == 0, "恢复后缺失检测应重置，实际 " + MissingStore.count())
+        val again = findTrack("backup-v2")
+        check(again != null, "恢复后曲目应回来")
+        checkNear(again!!.listenedMs, 40 * SECOND, 3 * SECOND, "恢复后时长")
+    }
+
+    test("备份被篡改时拒绝恢复且不改动原数据") {
+        val dir = freshEnv()
+        val item = track("tamper", title = "篡改前")
+        SessionTracker.onTrack(item)
+        SessionTracker.onPlayingChanged(true)
+        playFor(item, 0L, 40 * SECOND)
+        SessionTracker.flush()
+        Thread.sleep(300L)
+        val before = findTrack("tamper")
+        check(before != null, "准备：应有记录")
+
+        val backup = File(dir, "original.zip")
+        check(StatsStore.backupTo(backup).startsWith("已备份"), "备份应成功")
+
+        // 复制 zip 并篡改 tracks.jsonl 内容
+        val tampered = File(dir, "tampered.zip")
+        val zin = java.util.zip.ZipFile(backup)
+        val zos = java.util.zip.ZipOutputStream(tampered.outputStream())
+        val entries = zin.entries()
+        while (entries.hasMoreElements()) {
+            val entry = entries.nextElement()
+            if (entry.isDirectory) continue
+            zos.putNextEntry(java.util.zip.ZipEntry(entry.name))
+            if (entry.name == "tracks.jsonl") {
+                zos.write("{\"k\":\"hacked\"}\n".toByteArray(Charsets.UTF_8))
+            } else {
+                zos.write(zin.getInputStream(entry).readBytes())
+            }
+            zos.closeEntry()
+        }
+        zos.close()
+        zin.close()
+
+        val result = StatsStore.restoreFrom(tampered)
+        check(result.startsWith("备份校验和不匹配") || result.startsWith("恢复失败"), "应拒绝被篡改的备份，实际：" + result)
+        val after = findTrack("tamper")
+        check(after != null, "原数据不应被改动")
+        check(after!!.title == "篡改前", "原数据标题不应变化")
+    }
+
+    test("旧版（v1）备份仍可恢复") {
+        val dir = freshEnv()
+        val legacy = File(dir, "legacy.zip")
+        val zos = java.util.zip.ZipOutputStream(legacy.outputStream())
+        zos.putNextEntry(java.util.zip.ZipEntry("manifest.json"))
+        zos.write("{\"v\":1,\"exportedAt\":\"2026-10-01 00:00:00\",\"tracks\":1}".toByteArray(Charsets.UTF_8))
+        zos.closeEntry()
+        zos.putNextEntry(java.util.zip.ZipEntry("tracks.jsonl"))
+        zos.write("{\"k\":\"legacykey\",\"id\":\"legacy-id\",\"ti\":\"旧备份\",\"ar\":\"歌手\",\"al\":\"专辑\",\"dur\":240000}\n".toByteArray(Charsets.UTF_8))
+        zos.closeEntry()
+        zos.close()
+        val result = StatsStore.restoreFrom(legacy)
+        check(result.startsWith("已恢复"), "旧备份应能恢复，实际：" + result)
+        check(File(dir, "tracks.jsonl").isFile, "旧备份的曲目字典应被还原")
+    }
+
     println()
     println("结果：通过 " + passed + " / 失败 " + failed)
     cleanup()

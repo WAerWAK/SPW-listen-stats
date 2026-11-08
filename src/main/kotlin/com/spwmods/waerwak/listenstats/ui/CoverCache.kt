@@ -103,6 +103,21 @@ object CoverCache {
         return true
     }
 
+    /**
+     * 恢复统计后调用：内存里的封面可能来自另一台机器的曲库，必须清掉
+     *
+     * 磁盘缓存不用删：它按曲目 key 存，命中不了自然会走 LRU 淘汰。
+     */
+    @Synchronized
+    fun clearMemory() {
+        bitmaps.clear()
+        order.clear()
+        failedAt.clear()
+        generation.value = generation.value + 1
+        statsCachedAt = 0L
+        statsCache = ""
+    }
+
     /** 面板打开时调用：清空失败冷却并触发重新加载 */
     @Synchronized
     fun resetFailures() {

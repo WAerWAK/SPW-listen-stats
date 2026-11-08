@@ -457,40 +457,36 @@ object StatsActions {
     }
 
 
-    /** 弹出对话框：备份全部数据 */
+    /**
+     * 弹出对话框：备份全部数据
+     *
+     * 对话框与 zip 打包都在后台线程（[com.spwmods.waerwak.listenstats.ui.BackgroundDialogs]）：
+     * 上万行事件打包要几百毫秒，放在宿主界面线程上会明显掉帧。
+     */
     @JvmStatic
     @JvmName("backupDataDialog")
     fun backupDataDialog() {
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(Date())
-        javax.swing.SwingUtilities.invokeLater {
-            try {
-                val fd = java.awt.FileDialog(null as java.awt.Frame?, "备份听歌统计数据", java.awt.FileDialog.SAVE)
-                fd.file = "listen-stats-backup-" + stamp + ".zip"
-                fd.isVisible = true
-                val dir = fd.directory
-                val name = fd.file
-                if (dir != null && name != null) {
-                    val result = StatsStore.backupTo(java.io.File(dir, name))
-                    toast(result, result.startsWith("已备份"))
-                }
-            } catch (t: Throwable) {
-                toast("备份失败：" + t.message, false)
-            }
-        }
+        com.spwmods.waerwak.listenstats.ui.BackgroundDialogs.run({
+            val file = com.spwmods.waerwak.listenstats.ui.BackgroundDialogs.saveFile(
+                "备份听歌统计数据",
+                "listen-stats-backup-" + stamp + ".zip"
+            )
+            if (file == null) null else StatsStore.backupTo(file)
+        }, { message ->
+            if (message != null) toast(message, message.startsWith("已备份"))
+        })
     }
 
     /** 弹出对话框：从备份恢复（先展示备份内容摘要，确认后才覆盖） */
     @JvmStatic
     @JvmName("restoreDataDialog")
     fun restoreDataDialog() {
-        javax.swing.SwingUtilities.invokeLater {
-            try {
-                val fd = java.awt.FileDialog(null as java.awt.Frame?, "选择备份文件", java.awt.FileDialog.LOAD)
-                fd.isVisible = true
-                val dir = fd.directory
-                val name = fd.file
-                if (dir == null || name == null) return@invokeLater
-                val file = java.io.File(dir, name)
+        com.spwmods.waerwak.listenstats.ui.BackgroundDialogs.run({
+            val file = com.spwmods.waerwak.listenstats.ui.BackgroundDialogs.openFile("选择备份文件")
+            if (file == null) {
+                null
+            } else {
 
                 // 读 manifest 摘要：让用户知道这个备份里有什么（旧版备份没有 manifest）
                 val manifest = try {
@@ -517,23 +513,20 @@ object StatsActions {
                 }
                 val message = summary + "\n\n" +
                     "恢复会用备份内容替换当前统计：\n" +
-                    "当前数据会改名为 .bak 保留（不删除）。\n\n确认恢复吗？"
-                val choice = javax.swing.JOptionPane.showConfirmDialog(
-                    null, message, "恢复听歌统计",
-                    javax.swing.JOptionPane.YES_NO_OPTION,
-                    javax.swing.JOptionPane.WARNING_MESSAGE
-                )
-                if (choice != javax.swing.JOptionPane.YES_OPTION) return@invokeLater
-
-                val result = StatsStore.restoreFrom(file)
-                toast(result, result.startsWith("已恢复"))
-            } catch (t: Throwable) {
-                toast("恢复失败：" + t.message, false)
+                    "当前数据会改名为 .bak 保留（不删除）。\n" +
+                    "缺失检测记录会被清空（恢复后需重新检测）。\n\n确认恢复吗？"
+                if (com.spwmods.waerwak.listenstats.ui.BackgroundDialogs.confirm("恢复听歌统计", message)) {
+                    StatsStore.restoreFrom(file)
+                } else {
+                    null
+                }
             }
-        }
+        }, { message ->
+            if (message != null) toast(message, message.startsWith("已恢复"))
+        })
     }
 
-    /** 弹出系统保存对话框，让用户自选导出位置 */
+    /** 弹出系统保存对话框，让用户自选导出位置（对话框与写盘都在后台线程） */
     @JvmStatic
     @JvmName("exportCsvDialog")
     fun exportCsvDialog() {
@@ -543,27 +536,18 @@ object StatsActions {
             return
         }
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(Date())
-        javax.swing.SwingUtilities.invokeLater {
-            try {
-                val fd = java.awt.FileDialog(
-                    null as java.awt.Frame?,
-                    "导出 CSV",
-                    java.awt.FileDialog.SAVE
-                )
-                fd.file = "listen-stats-" + stamp + ".csv"
-                fd.isVisible = true
-                val dir = fd.directory
-                val name = fd.file
-                if (dir != null && name != null) {
-                    writeCsv(java.io.File(dir, name), tracks)
-                }
-            } catch (t: Throwable) {
-                toast("导出失败：" + t.message, false)
-            }
-        }
+        com.spwmods.waerwak.listenstats.ui.BackgroundDialogs.run({
+            val file = com.spwmods.waerwak.listenstats.ui.BackgroundDialogs.saveFile(
+                "导出 CSV",
+                "listen-stats-" + stamp + ".csv"
+            )
+            if (file == null) null else writeCsv(file, tracks)
+        }, { message ->
+            if (message != null) toast(message, message.startsWith("已导出"))
+        })
     }
 
-    private fun writeCsv(file: java.io.File, tracks: List<TrackAgg>) {
+    private fun writeCsv(file: java.io.File, tracks: List<TrackAgg>): String {
         val sb = StringBuilder(4096)
         sb.append('\uFEFF')
         sb.append("曲目,艺术家,专辑,次数,累计分钟,跳过次数,首次播放,最近播放,路径\n")
@@ -581,11 +565,11 @@ object StatsActions {
             sb.append(csv(if (t.path.isBlank()) t.id else t.path)).append('\n')
             i++
         }
-        try {
+        return try {
             java.nio.file.Files.write(file.toPath(), sb.toString().toByteArray(Charsets.UTF_8))
-            toast("已导出：" + file.absolutePath, true)
+            "已导出：" + file.absolutePath
         } catch (t: Throwable) {
-            toast("导出失败：" + t.message, false)
+            "导出失败：" + t.message
         }
     }
 
