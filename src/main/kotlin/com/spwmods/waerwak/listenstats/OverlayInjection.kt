@@ -70,6 +70,15 @@ object OverlayInjection {
     val fontExtraPercent = mutableStateOf(0)
 
     /**
+     * 时长单位开关（Compose 状态）
+     *
+     * 概览/榜单可能一直处于组合中，直接读 UiStateStore 的普通字段不会触发重组；
+     * 这里用状态持有，信息页切换后同屏的两个页面立即跟着变。
+     */
+    val hmsOverview = mutableStateOf(false)
+    val hmsRanking = mutableStateOf(false)
+
+    /**
      * 悬浮圆钮入口是否显示
      *
      * 配置页的「悬浮按钮-卸载」只隐藏圆钮，**不**卸载注入本身：
@@ -318,6 +327,8 @@ object OverlayInjection {
             contentPercent.value = UiStateStore.loadContentPercent()
             fontExtraPercent.value = UiStateStore.loadFontExtraPercent()
             entryEnabled.value = UiStateStore.loadEntryEnabled()
+            hmsOverview.value = UiStateStore.loadDurationHmsOverview()
+            hmsRanking.value = UiStateStore.loadDurationHmsRanking()
             // 导航感知：切页时关面板，返回键优先关弹层/面板（失败不影响主功能）
             com.spwmods.waerwak.listenstats.ui.NavigationHook.install(
                 onPageChange = {

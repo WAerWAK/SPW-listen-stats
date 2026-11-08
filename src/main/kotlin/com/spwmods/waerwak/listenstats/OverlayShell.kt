@@ -94,6 +94,7 @@ internal fun OverlayHost() {
         TrackDetailState.open.value = null
         GroupDetailState.open.value = ""
         CalState.open.value = false
+        RangeDetailState.open.value = false
     }
 
     // 面板外部关闭时也复位悬停态（Navigator hook 与 AWT 监听两条路径都走这里）
@@ -466,6 +467,8 @@ internal fun StatsOverlay(onClose: () -> Unit) {
             showRetentionEditor = false
         } else if (showFontSizeEditor) {
             showFontSizeEditor = false
+        } else if (RangeDetailState.open.value) {
+            RangeDetailState.open.value = false
         } else if (dayDetailDate.isNotEmpty()) {
             dayDetailDate = ""
         } else if (TrackDetailState.open.value != null) {

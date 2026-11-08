@@ -189,6 +189,7 @@ internal fun InfoTab(
                         checked = hmsOverview.value,
                         onToggle = { hms ->
                             hmsOverview.value = hms
+                            OverlayInjection.hmsOverview.value = hms
                             com.spwmods.waerwak.listenstats.ui.UiStateStore.saveDurationHmsOverview(hms)
                         }
                     )
@@ -199,6 +200,7 @@ internal fun InfoTab(
                         checked = hmsRanking.value,
                         onToggle = { hms ->
                             hmsRanking.value = hms
+                            OverlayInjection.hmsRanking.value = hms
                             com.spwmods.waerwak.listenstats.ui.UiStateStore.saveDurationHmsRanking(hms)
                         }
                     )

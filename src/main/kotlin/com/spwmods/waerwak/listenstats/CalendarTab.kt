@@ -72,10 +72,7 @@ internal fun CalendarTab(tick: Int, onSelectDay: (String) -> Unit) {
 
     // 热力图单击：第一次选中该天让下方图表切到当天，再点一次才打开"当天明细"
     var pickedDay by remember { mutableStateOf("") }
-    // 图表选中某根柱子 → 下方展开歌曲明细
-    var bucketTitle by remember { mutableStateOf("") }
-    var bucketFrom by remember { mutableStateOf(0L) }
-    var bucketTo by remember { mutableStateOf(0L) }
+
     var contentWidthPx by remember { mutableStateOf(0) }
     val dLocal = LocalDensity.current
     // 两个组件与内容同宽（内容本身已限制在屏幕宽度的可配置百分比内）
@@ -144,30 +141,13 @@ internal fun CalendarTab(tick: Int, onSelectDay: (String) -> Unit) {
                 onByTime = { byTime = it },
                 onChartType = { chartType = it },
                 onPickBucket = { bucket ->
-                    if (bucketTitle == bucket.title && bucketFrom == bucket.startMs) {
-                        // 再点同一根柱子：收起
-                        bucketTitle = ""
-                        bucketFrom = 0L
-                        bucketTo = 0L
-                    } else {
-                        bucketTitle = bucket.title
-                        bucketFrom = bucket.startMs
-                        bucketTo = bucket.endMs
-                    }
+                    // 与「当天明细」一致的弹窗；同一根柱子再点会重新打开（内容相同）
+                    RangeDetailState.title.value = bucket.title
+                    RangeDetailState.fromMs.value = bucket.startMs
+                    RangeDetailState.toMs.value = bucket.endMs
+                    RangeDetailState.open.value = true
                 }
             )
-            if (bucketTitle.isNotEmpty() && bucketTo > bucketFrom) {
-                RangeDetailPanel(
-                    title = bucketTitle,
-                    fromMs = bucketFrom,
-                    toMs = bucketTo,
-                    onClose = {
-                        bucketTitle = ""
-                        bucketFrom = 0L
-                        bucketTo = 0L
-                    }
-                )
-            }
         }
     }
 }

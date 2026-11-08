@@ -469,38 +469,7 @@ internal fun ActivityHeatmap(
                 }
             }
         }
-        Spacer(Modifier.height(8.dp))
-        // 图例：四档实际区间（基准是近 12 个月四分位，颜色不再等距对应分钟数）
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            var lv = 0
-            while (lv <= 4) {
-                Box(
-                    Modifier
-                        .width(11.dp)
-                        .height(11.dp)
-                        .drawBehind {
-                            drawRoundRect(
-                                color = heatColor(lv, p.isDark),
-                                cornerRadius = androidx.compose.ui.geometry.CornerRadius(2f, 2f)
-                            )
-                        }
-                )
-                Spacer(Modifier.width(3.dp))
-                lv++
-            }
-            Spacer(Modifier.width(8.dp))
-            Text(legendText(baseline), fontSize = SaltDesign.fontSizeSub, color = p.subText)
-        }
     }
-}
-
-/** 图例文案：三档边界（按分钟四舍五入展示） */
-private fun legendText(baseline: com.spwmods.waerwak.listenstats.stats.HeatmapBaseline): String {
-    val p25 = formatMs(baseline.p25)
-    val p50 = formatMs(baseline.p50)
-    val p75 = formatMs(baseline.p75)
-    val note = if (baseline.fallback) "（样本不足，按最大值等距）" else "（近 12 个月四分位）"
-    return "<" + p25 + " · <" + p50 + " · <" + p75 + " · ≥" + p75 + note
 }
 
 /** 热力图配色：按「当天收听时长」档位（0=无，1–4 递增）而非次数 */

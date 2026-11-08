@@ -47,7 +47,7 @@ internal fun OverviewTab(tick: Long) {
             GroupHeader("总览")
             Row(Modifier.fillMaxWidth()) {
                 // 累计收听：点击循环切换三种格式
-                val hmsOverview = com.spwmods.waerwak.listenstats.ui.UiStateStore.loadDurationHmsOverview()
+                val hmsOverview = OverlayInjection.hmsOverview.value
                 KpiCellParts(
                     label = "累计收听",
                     parts = if (hmsOverview) durationPartsHms(snapshot.totalMs)

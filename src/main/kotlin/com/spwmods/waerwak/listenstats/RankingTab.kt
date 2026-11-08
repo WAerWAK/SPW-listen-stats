@@ -45,7 +45,7 @@ import java.time.LocalDate
 
 /** 榜单时长列：按「信息 → 显示 → 榜单时长用 h:mm:ss」决定格式 */
 private fun formatRankDuration(ms: Long): String {
-    return if (com.spwmods.waerwak.listenstats.ui.UiStateStore.loadDurationHmsRanking()) formatHms(ms) else formatMs(ms)
+    return if (OverlayInjection.hmsRanking.value) formatHms(ms) else formatMs(ms)
 }
 
 @Composable
