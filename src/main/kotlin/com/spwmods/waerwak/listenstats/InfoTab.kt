@@ -183,17 +183,6 @@ internal fun InfoTab(
                         }
                     }
                     RowDivider()
-                    val hmsOverview = remember { mutableStateOf(com.spwmods.waerwak.listenstats.ui.UiStateStore.loadDurationHmsOverview()) }
-                    ToggleRow(
-                        label = "概览时长用 h/m/s",
-                        checked = hmsOverview.value,
-                        onToggle = { hms ->
-                            hmsOverview.value = hms
-                            OverlayInjection.hmsOverview.value = hms
-                            com.spwmods.waerwak.listenstats.ui.UiStateStore.saveDurationHmsOverview(hms)
-                        }
-                    )
-                    RowDivider()
                     val hmsRanking = remember { mutableStateOf(com.spwmods.waerwak.listenstats.ui.UiStateStore.loadDurationHmsRanking()) }
                     ToggleRow(
                         label = "榜单时长用 h:mm:ss",

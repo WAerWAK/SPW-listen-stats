@@ -945,9 +945,7 @@ fun main() {
         check(com.spwmods.waerwak.listenstats.formatHms(0L) == "0:00", "0 秒：" + com.spwmods.waerwak.listenstats.formatHms(0L))
         check(com.spwmods.waerwak.listenstats.formatHms(65_000L) == "1:05", "65 秒应显示 1:05")
         check(com.spwmods.waerwak.listenstats.formatHms(3_725_000L) == "1:02:05", "1 小时 2 分 5 秒")
-        val parts = com.spwmods.waerwak.listenstats.durationPartsHms(3_725_000L)
-        check(parts.size == 3, "h/m/s 应为三段")
-        check(parts[0].first == "1" && parts[1].first == "02" && parts[2].first == "05", "h/m/s 数值")
+
     }
 
     println()

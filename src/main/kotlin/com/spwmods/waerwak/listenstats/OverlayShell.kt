@@ -631,6 +631,9 @@ internal fun StatsOverlay(onClose: () -> Unit) {
             }
         )
     }
+    if (RangeDetailState.open.value) {
+        RangeDetailDialog(onDismiss = { RangeDetailState.open.value = false })
+    }
     if (dayDetailDate.isNotEmpty()) {
         DayDetailDialog(date = dayDetailDate, onDismiss = { dayDetailDate = "" })
     }
