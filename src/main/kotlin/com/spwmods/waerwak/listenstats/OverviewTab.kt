@@ -42,6 +42,7 @@ internal fun OverviewTab(tick: Long) {
     var durationMode by remember { mutableStateOf(0) }
 
     Column(Modifier.fillMaxWidth()) {
+        LoadErrorBanner()
         SaltGroup {
             GroupHeader("总览")
             Row(Modifier.fillMaxWidth()) {

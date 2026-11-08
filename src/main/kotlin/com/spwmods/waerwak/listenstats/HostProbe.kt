@@ -141,12 +141,9 @@ object HostProbe {
                 append("  compose=").append(composeVersion())
                 append("  data=").append(dir.absolutePath)
             }
-            Files.write(
-                File(dir, "listen-stats.log").toPath(),
-                listOf(line),
-                Charsets.UTF_8,
-                StandardOpenOption.CREATE,
-                StandardOpenOption.APPEND
+            com.spwmods.waerwak.listenstats.stats.LogFiles.append(
+                File(dir, "listen-stats.log"),
+                line + "\n"
             )
             true
         } catch (t: Throwable) {

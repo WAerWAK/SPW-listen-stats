@@ -849,6 +849,31 @@ fun main() {
         check(File(dir, "tracks.jsonl").isFile, "旧备份的曲目字典应被还原")
     }
 
+    test("读取失败时保留上次数据并记录错误") {
+        val dir = freshEnv()
+        val item = track("loaderr", title = "读取测试")
+        SessionTracker.onTrack(item)
+        SessionTracker.onPlayingChanged(true)
+        playFor(item, 0L, 40 * SECOND)
+        SessionTracker.flush()
+        Thread.sleep(300L)
+        check(StatsStore.allTracks().isNotEmpty(), "准备：应有正常数据")
+
+        // 塞一个非法 UTF-8 的聚合文件，让读取抛异常
+        val daily = File(dir, "daily")
+        daily.mkdirs()
+        val broken = File(daily, "2099-01.jsonl")
+        broken.writeText("{这不是合法的聚合行}\n", Charsets.UTF_8)
+        StatsStore.resetForTesting(dir)
+        check(StatsStore.allTracks().isNotEmpty(), "上次成功的数据应保留")
+        check(StatsStore.loadError() != null, "应记录读取失败，实际 " + StatsStore.loadError())
+
+        broken.delete()
+        StatsStore.resetForTesting(dir)
+        StatsStore.allTracks()
+        check(StatsStore.loadError() == null, "修好后错误应消失，实际 " + StatsStore.loadError())
+    }
+
     println()
     println("结果：通过 " + passed + " / 失败 " + failed)
     cleanup()

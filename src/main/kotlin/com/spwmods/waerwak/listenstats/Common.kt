@@ -743,6 +743,33 @@ internal fun formatMs(ms: Long): String {
     return minutes.toString() + " 分钟"
 }
 
+/**
+ * 数据读取失败时的错误条
+ *
+ * 读取失败时内存里保留的是上次成功的数据；只显示"还没有数据"会让用户以为数据丢了。
+ */
+@Composable
+internal fun LoadErrorBanner() {
+    val error = com.spwmods.waerwak.listenstats.stats.StatsStore.loadError()
+    if (error == null) return
+    SaltGroup {
+        GroupHeader("数据读取异常")
+        Text(
+            error,
+            fontSize = SaltDesign.fontSizeMain,
+            color = LocalSaltPalette.current.subText,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+        )
+        Text(
+            "当前列表显示的是上一次成功加载的数据；修好数据文件后会自动恢复。",
+            fontSize = SaltDesign.fontSizeMain,
+            color = LocalSaltPalette.current.subText,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+        )
+    }
+    Spacer(Modifier.height(12.dp))
+}
+
 /** 明细/曲目详情用：精确到秒（不足 1 分钟只显示秒） */
 internal fun formatMsPrecise(ms: Long): String {
     if (ms <= 0L) return "0 秒"

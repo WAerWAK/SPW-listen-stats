@@ -292,6 +292,8 @@ internal fun InfoTab(
                     RowDivider()
                     ItemRow("计时诊断", timingDiagnosticsText())
                     RowDivider()
+                    ItemRow("数据读取", com.spwmods.waerwak.listenstats.stats.StatsStore.loadError() ?: "正常")
+                    RowDivider()
                     ItemRow("封面缓存", com.spwmods.waerwak.listenstats.ui.CoverCache.statsText())
                     RowDivider()
                     ItemRow("标题栏按钮", com.spwmods.waerwak.listenstats.ui.TitlebarButton.statusText())

@@ -120,11 +120,9 @@ object OverlayInjection {
             val dir = StatsStore.dataDirOrNull() ?: return
             val stamp = SimpleDateFormat("MM-dd HH:mm:ss", Locale.ROOT).format(Date())
             val line = stamp + "  " + tag + "  " + message + "\n"
-            java.nio.file.Files.write(
-                java.io.File(dir, "hook-diag.txt").toPath(),
-                line.toByteArray(Charsets.UTF_8),
-                java.nio.file.StandardOpenOption.CREATE,
-                java.nio.file.StandardOpenOption.APPEND
+            com.spwmods.waerwak.listenstats.stats.LogFiles.append(
+                java.io.File(dir, "hook-diag.txt"),
+                line
             )
         } catch (t: Throwable) {
             // 诊断写不进去不影响功能

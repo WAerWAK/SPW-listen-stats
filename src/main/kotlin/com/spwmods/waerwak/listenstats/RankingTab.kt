@@ -246,6 +246,7 @@ internal fun TrackListView(
         StatsStore.trackPageRange(page, pageSize, sortKey, asc, query, sinceDate)
     }
     Column(Modifier.fillMaxWidth()) {
+        LoadErrorBanner()
         SaltGroup {
             ListHeader("曲目", sortKey, asc, onSort)
             if (data.items.isEmpty()) {

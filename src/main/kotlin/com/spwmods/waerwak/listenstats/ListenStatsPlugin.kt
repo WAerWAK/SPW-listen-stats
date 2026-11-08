@@ -37,6 +37,17 @@ class ListenStatsPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext)
             System.err.println("[listen-stats] 恢复会话失败: " + t.message)
         }
 
+        // 后台预热统计缓存：首次打开面板不再同步解析 daily/ 与排序
+        val warm = Thread({
+            try {
+                com.spwmods.waerwak.listenstats.stats.StatsStore.prefetch()
+            } catch (t: Throwable) {
+                System.err.println("[listen-stats] 预热失败: " + t.message)
+            }
+        }, "listen-stats-prefetch")
+        warm.isDaemon = true
+        warm.start()
+
         registerHotkey()
 
         // 已授权 CLASS_TRANSFORM 时自动安装浮层（未授权则等用户手动触发）

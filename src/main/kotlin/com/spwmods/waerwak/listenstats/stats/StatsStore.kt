@@ -168,6 +168,14 @@ object StatsStore {
     var dataVersion: Long = 0L
         private set
 
+    /** 上次加载数据时的错误（null = 正常）；UI 用它显示错误条而不是把失败装成"没数据" */
+    @Volatile
+    var lastLoadError: String? = null
+        private set
+
+    @Synchronized
+    fun loadError(): String? = lastLoadError
+
     /** 备份目录内的元数据文件名 */
     private const val MANIFEST_FILE = "manifest.json"
 
@@ -424,12 +432,7 @@ object StatsStore {
             val file = File(dir, "listen-stats.log")
             val line = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ROOT).format(Date()) +
                 "  [backup] " + message + "\n"
-            Files.write(
-                file.toPath(),
-                line.toByteArray(Charsets.UTF_8),
-                StandardOpenOption.CREATE,
-                StandardOpenOption.APPEND
-            )
+            LogFiles.append(file, line)
         } catch (t: Throwable) {
             System.err.println("[listen-stats] " + message)
         }
@@ -798,6 +801,51 @@ object StatsStore {
         return HourProfile(counts, ms)
     }
 
+    // ---------------------------------------------------------------- 查询缓存（C3）
+    //
+    // 面板每 1.5 秒重组一次、翻页/排序/切范围都会重新查；命中条件 = 数据版本 + 缺失状态未变。
+    // 排序结果与范围聚合都缓存在这里，把「每次重组都全量排序」变成「每次数据变化只算一次」。
+
+    private var cacheSignature = ""
+    private val rangeCache = HashMap<String, LinkedHashMap<String, TrackAgg>>()
+    private val sortedCache = HashMap<String, ArrayList<TrackAgg>>()
+    private var cachedSnapshot: StatsSnapshot? = null
+    private var cachedSnapshotTop = -1
+    private var cachedSnapshotRecent = -1
+
+    /** 缓存身份：数据版本 / 是否隐藏缺失 / 缺失条数（检测结果变化不会动 dataVersion） */
+    private fun cacheSignature(): String {
+        return dataVersion.toString() + "|" + MissingStore.hidden + "|" + MissingStore.count()
+    }
+
+    private fun ensureCacheFresh() {
+        val signature = cacheSignature()
+        if (signature == cacheSignature) return
+        cacheSignature = signature
+        rangeCache.clear()
+        sortedCache.clear()
+        cachedSnapshot = null
+        cachedSnapshotTop = -1
+        cachedSnapshotRecent = -1
+    }
+
+    /**
+     * 启动时后台预热：把首次打开面板要付的加载/排序成本提前付掉
+     *
+     * 由 ListenStatsPlugin 在守护线程里调用，绝不放在宿主界面线程上。
+     */
+    @Synchronized
+    fun prefetch() {
+        ensureLoaded()
+        try {
+            snapshot(10, 10)
+            sortedTracks(null, 0, false)
+            sortedTracks(null, 1, false)
+        } catch (t: Throwable) {
+            System.err.println("[listen-stats] 预热缓存失败: " + t.message)
+        }
+    }
+
     /** 列表里是否跳过这首：开了「隐藏缺失曲目」且这首确实缺失 */
     private fun hideInList(key: String): Boolean {
         return MissingStore.hidden && MissingStore.isMissingKey(key)
@@ -805,9 +853,14 @@ object StatsStore {
 
     /** 按时间范围聚合后的曲目（sinceDate 为 null = 总榜；否则只统计 date >= sinceDate） */
     private fun rangeAggregatedTracks(sinceDate: String?): LinkedHashMap<String, TrackAgg> {
+        ensureCacheFresh()
+        val cacheKey = if (sinceDate == null) "" else sinceDate
+        val hit = rangeCache[cacheKey]
+        if (hit != null) return hit
         val map = LinkedHashMap<String, TrackAgg>()
         if (sinceDate == null) {
             for (agg in tracks.values) map[agg.key] = agg
+            rangeCache[cacheKey] = map
             return map
         }
         for (dayEntry in dayTracks.entries) {
@@ -840,7 +893,35 @@ object StatsStore {
                 }
             }
         }
+        rangeCache[cacheKey] = map
         return map
+    }
+
+    /** 排序后的曲目列表（按范围 + 排序键缓存；关键词过滤交给调用方，避免为每个搜索词建缓存） */
+    private fun sortedTracks(sinceDate: String?, sortKey: Int, asc: Boolean): ArrayList<TrackAgg> {
+        ensureCacheFresh()
+        val key = (if (sinceDate == null) "" else sinceDate) + "|" + sortKey + "|" + asc
+        val hit = sortedCache[key]
+        if (hit != null) return hit
+        val source = rangeAggregatedTracks(sinceDate)
+        val list = ArrayList<TrackAgg>(source.size)
+        for (agg in source.values) {
+            if (agg.count <= 0 && agg.listenedMs <= 0L) continue
+            if (hideInList(agg.key)) continue
+            list.add(agg)
+        }
+        list.sortWith(Comparator { a, b ->
+            val primary = when (sortKey) {
+                1 -> a.count.compareTo(b.count)
+                2 -> a.skipCount.compareTo(b.skipCount)
+                3 -> a.lastPlayed.compareTo(b.lastPlayed)
+                4 -> titleCollator.compare(a.title, b.title)
+                else -> a.listenedMs.compareTo(b.listenedMs)
+            }
+            if (primary != 0) (if (asc) primary else -primary) else b.count.compareTo(a.count)
+        })
+        sortedCache[key] = list
+        return list
     }
 
     /** 中文标题排序器（按拼音）；与其它排序一起在同步块内使用 */
@@ -863,26 +944,16 @@ object StatsStore {
     ): TrackPage {
         ensureLoaded()
         val needle = query.trim().lowercase()
-        val source = rangeAggregatedTracks(sinceDate)
-        val sorted = ArrayList<TrackAgg>()
-        for (agg in source.values) {
-            if (agg.count <= 0 && agg.listenedMs <= 0L) continue
-            if (hideInList(agg.key)) continue
-            if (needle.isNotEmpty() && !matches(agg, needle)) continue
-            sorted.add(agg)
+        val base = sortedTracks(sinceDate, sortKey, asc)
+        if (needle.isEmpty()) return buildTrackPage(base, page, pageSize)
+        val filtered = ArrayList<TrackAgg>(base.size)
+        var index = 0
+        while (index < base.size) {
+            val agg = base[index]
+            index++
+            if (matches(agg, needle)) filtered.add(agg)
         }
-        sorted.sortWith(Comparator { a, b ->
-            val primary = when (sortKey) {
-                1 -> a.count.compareTo(b.count)
-                2 -> a.skipCount.compareTo(b.skipCount)
-                3 -> a.lastPlayed.compareTo(b.lastPlayed)
-                4 -> titleCollator.compare(a.title, b.title)
-                else -> a.listenedMs.compareTo(b.listenedMs)
-            }
-            // 主键相同时按次数降序兜底，保证结果稳定
-            if (primary != 0) (if (asc) primary else -primary) else b.count.compareTo(a.count)
-        })
-        return buildTrackPage(sorted, page, pageSize)
+        return buildTrackPage(filtered, page, pageSize)
     }
 
     /**
@@ -901,6 +972,7 @@ object StatsStore {
         asc: Boolean = false
     ): AggregatePage {
         ensureLoaded()
+        ensureCacheFresh()
         val needle = query.trim().lowercase()
         val source = rangeAggregatedTracks(sinceDate)
         val map = LinkedHashMap<String, AggregateRow>()
@@ -1230,6 +1302,11 @@ object StatsStore {
     @Synchronized
     fun snapshot(topLimit: Int = 10, recentLimit: Int = 10): StatsSnapshot {
         ensureLoaded()
+        ensureCacheFresh()
+        val cached = cachedSnapshot
+        if (cached != null && cachedSnapshotTop == topLimit && cachedSnapshotRecent == recentLimit) {
+            return cached
+        }
 
         val byCount = ArrayList<TrackAgg>()
         for (agg in tracks.values) {
@@ -1264,7 +1341,7 @@ object StatsStore {
         var totalSkips = 0
         for (agg in tracks.values) totalSkips += agg.skipCount
 
-        return StatsSnapshot(
+        val result = StatsSnapshot(
             totalCount = totalCount,
             totalMs = totalMs,
             trackCount = tracks.size,
@@ -1272,6 +1349,10 @@ object StatsStore {
             topTracks = top,
             recentTracks = recent
         )
+        cachedSnapshot = result
+        cachedSnapshotTop = topLimit
+        cachedSnapshotRecent = recentLimit
+        return result
     }
 
     /** 清空（内存 + 磁盘事件日志改名为 .bak，可回滚） */
@@ -1406,6 +1487,7 @@ object StatsStore {
     private fun ensureLoaded() {
         if (loaded) return
         loaded = true
+        lastLoadError = null
         val dir = dataDir
         if (dir == null) return
 
@@ -1435,6 +1517,8 @@ object StatsStore {
             if (f.isFile && f.name.endsWith(".jsonl")) list.add(f)
         }
         list.sortWith(Comparator { a, b -> a.name.compareTo(b.name) })
+        var failedFiles = 0
+        var lastFailure = ""
         for (file in list) {
             try {
                 val reader = Files.newBufferedReader(file.toPath(), Charsets.UTF_8)
@@ -1442,23 +1526,36 @@ object StatsStore {
                     while (true) {
                         val line = reader.readLine()
                         if (line == null) break
-                        applyDailyLine(line)
+                        if (!applyDailyLine(line)) {
+                            failedFiles++
+                            lastFailure = file.name + "：有无法解析的行"
+                        }
                     }
                 } finally {
                     reader.close()
                 }
             } catch (t: Throwable) {
+                failedFiles++
+                lastFailure = file.name + "：" + (t.message ?: t.javaClass.simpleName)
                 System.err.println("[listen-stats] 读取聚合 " + file.name + " 失败: " + t.message)
             }
         }
+        if (failedFiles > 0) {
+            lastLoadError = "有 " + failedFiles + " 个聚合文件读取失败（" + lastFailure + "），当前显示的是其余数据"
+        }
     }
 
-    /** 解析一行聚合记录并累加到内存 */
-    private fun applyDailyLine(line: String) {
-        if (line.length < 8 || line[0] != '{') return
+    /**
+     * 解析一行聚合记录并累加到内存
+     *
+     * @return false = 这一行无法解析（坏行会让上层报"读取异常"，而不是静默丢数据）
+     */
+    private fun applyDailyLine(line: String): Boolean {
+        if (line.isBlank()) return true
+        if (line.length < 8 || line[0] != '{') return false
         val date = JsonLite.string(line, "d")
         val key = JsonLite.string(line, "k")
-        if (date.isEmpty() || key.isEmpty()) return
+        if (date.isEmpty() || key.isEmpty()) return false
         val count = JsonLite.long(line, "c").toInt()
         val ms = JsonLite.long(line, "ms")
         val skips = JsonLite.long(line, "sk").toInt()
@@ -1537,6 +1634,7 @@ object StatsStore {
         totalCount += count
         totalMs += ms
         replayedLines++
+        return true
     }
 
     /** 旧版 events 目录的明细 → daily 目录的按月聚合 迁移 */
