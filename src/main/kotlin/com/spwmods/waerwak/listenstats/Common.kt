@@ -770,6 +770,33 @@ internal fun LoadErrorBanner() {
     Spacer(Modifier.height(12.dp))
 }
 
+/** 榜单时长列：h:mm:ss（不足 1 小时显示 mm:ss），数字定宽便于对齐 */
+internal fun formatHms(ms: Long): String {
+    if (ms <= 0L) return "0:00"
+    val totalSeconds = (ms + 500L) / 1_000L
+    val hours = totalSeconds / 3_600L
+    val minutes = (totalSeconds % 3_600L) / 60L
+    val seconds = totalSeconds % 60L
+    val mm = if (minutes < 10) "0" + minutes else minutes.toString()
+    val ss = if (seconds < 10) "0" + seconds else seconds.toString()
+    if (hours > 0L) return hours.toString() + ":" + mm + ":" + ss
+    return minutes.toString() + ":" + ss
+}
+
+/** 概览累计收听的 h/m/s 三段 */
+internal fun durationPartsHms(ms: Long): List<Pair<String, String>> {
+    if (ms <= 0L) return listOf("0" to "秒")
+    val totalSeconds = (ms + 500L) / 1_000L
+    val hours = totalSeconds / 3_600L
+    val minutes = (totalSeconds % 3_600L) / 60L
+    val seconds = totalSeconds % 60L
+    val list = ArrayList<Pair<String, String>>(3)
+    if (hours > 0L) list.add(hours.toString() to "时")
+    list.add((if (minutes < 10) "0" + minutes else minutes.toString()) to "分")
+    list.add((if (seconds < 10) "0" + seconds else seconds.toString()) to "秒")
+    return list
+}
+
 /** 明细/曲目详情用：精确到秒（不足 1 分钟只显示秒） */
 internal fun formatMsPrecise(ms: Long): String {
     if (ms <= 0L) return "0 秒"

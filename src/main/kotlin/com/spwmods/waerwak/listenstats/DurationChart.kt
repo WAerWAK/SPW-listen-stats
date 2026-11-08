@@ -62,7 +62,9 @@ internal fun DurationChart(
     onPickFrom: () -> Unit,
     onPickTo: () -> Unit,
     onByTime: (Boolean) -> Unit,
-    onChartType: (Int) -> Unit
+    onChartType: (Int) -> Unit,
+    /** 点击柱子 / 折线上的某个点：回调这根柱子的时间区间 */
+    onPickBucket: (com.spwmods.waerwak.listenstats.stats.Bucket) -> Unit = {}
 ) {
     val p = LocalSaltPalette.current
     val dLocal = LocalDensity.current
@@ -305,44 +307,46 @@ internal fun DurationChart(
                         }
                     )
                     if (chartType == 0) {
-                        Row(
-                            Modifier.fillMaxSize(),
-                            verticalAlignment = Alignment.Bottom,
-                            horizontalArrangement = Arrangement.spacedBy(3.dp)
-                        ) {
-                            var b = 0
-                            while (b < buckets.size) {
-                                val bucket = buckets[b]
-                                val value = values[b]
-                                val index = b
-                                Box(
-                                    Modifier
-                                        .weight(1f)
-                                        .height(170.dp)
-                                        .onPointerEvent(PointerEventType.Enter) {
-                                            hovered = index
-                                        }
-                                        .onPointerEvent(PointerEventType.Exit) {
-                                            if (hovered == index) hovered = -1
-                                        }
-                                        .drawBehind {
-                                            val ratio = if (axisMax > 0f) value / axisMax else 0f
-                                            val h = size.height * ratio * progress.value
-                                            if (h <= 0f) return@drawBehind
-                                            val barW = size.width * 0.66f
-                                            val left = (size.width - barW) / 2f
-                                            val active = hovered == index
+                        // 单块 Canvas 绘制全部柱子（原先每个桶一个 Box：范围拉到几年时会有上千个 composable）
+                        Box(
+                            Modifier.fillMaxSize()
+                                .onPointerEvent(PointerEventType.Move) { event ->
+                                    val chg = event.changes.firstOrNull()
+                                    if (chg != null && buckets.isNotEmpty() && plotPx > 0f) {
+                                        hovered = bucketIndexAt(chg.position.x, buckets.size, plotPx, 3f * density)
+                                    }
+                                }
+                                .onPointerEvent(PointerEventType.Exit) { hovered = -1 }
+                                .onPointerEvent(PointerEventType.Press) { event ->
+                                    val chg = event.changes.firstOrNull()
+                                    if (chg != null && buckets.isNotEmpty() && plotPx > 0f) {
+                                        onPickBucket(buckets[bucketIndexAt(chg.position.x, buckets.size, plotPx, 3f * density)])
+                                    }
+                                }
+                                .drawBehind {
+                                    if (buckets.isEmpty()) return@drawBehind
+                                    val n = buckets.size
+                                    val gapBar = 3f * density
+                                    val slot = (size.width - gapBar * (n - 1)) / n
+                                    if (slot <= 0f) return@drawBehind
+                                    var b = 0
+                                    while (b < n) {
+                                        val ratio = if (axisMax > 0f) values[b] / axisMax else 0f
+                                        val h = size.height * ratio * progress.value
+                                        if (h > 0f) {
+                                            val barW = slot * 0.66f
+                                            val left = b * (slot + gapBar) + (slot - barW) / 2f
                                             drawRoundRect(
-                                                color = if (active) p.highlight else p.highlight.copy(alpha = 0.6f),
+                                                color = if (hovered == b) p.highlight else p.highlight.copy(alpha = 0.6f),
                                                 topLeft = Offset(left, size.height - h),
                                                 size = Size(barW, h),
                                                 cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.5f * density, 2.5f * density)
                                             )
                                         }
-                                )
-                                b++
-                            }
-                        }
+                                        b++
+                                    }
+                                }
+                        )
                     } else {
                         // 折线 / 曲线
                         Box(
@@ -385,15 +389,19 @@ internal fun DurationChart(
                                 // 平均线统一在叠加层画（虚线 + 标签），这里不再重复绘制
                             }
                         )
-                        // 折线图的悬停：按最近点
+                        // 折线图的悬停：按最近点；点击同样按 x 反推桶
                         Row(Modifier.fillMaxSize()) {
                             var b3 = 0
                             while (b3 < buckets.size) {
                                 val index = b3
+                                val bucketRef = buckets[b3]
                                 Box(
                                     Modifier
                                         .weight(1f)
                                         .height(170.dp)
+                                        .onPointerEvent(PointerEventType.Press) {
+                                            onPickBucket(bucketRef)
+                                        }
                                         .onPointerEvent(PointerEventType.Enter) {
                                             hovered = index
                                         }
@@ -588,6 +596,20 @@ internal fun CalendarGlyph(color: Color) {
 
 
 /** 把最大值抬到「整」刻度（1/2/5 × 10^n），并留 12% 顶部余量避免最高柱贴顶 */
+/**
+ * 柱状图内 x 坐标 → 桶下标
+ *
+ * 柱子按「等宽槽位 + 3dp 间隔」布局，这里把鼠标位置换算回槽位，供悬停与点击共用。
+ */
+internal fun bucketIndexAt(x: Float, count: Int, width: Float, gap: Float): Int {
+    if (count <= 0) return 0
+    if (count == 1) return 0
+    val slot = (width - gap * (count - 1)) / count
+    if (slot <= 0f) return 0
+    val index = ((x + gap / 2f) / (slot + gap)).toInt()
+    return if (index < 0) 0 else if (index >= count) count - 1 else index
+}
+
 internal fun niceAxisMax(value: Float): Float {
     if (value <= 0f) return 1f
     val padded = value * 1.12f

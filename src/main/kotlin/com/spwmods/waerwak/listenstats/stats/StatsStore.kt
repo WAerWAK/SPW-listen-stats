@@ -1339,6 +1339,154 @@ object StatsStore {
         return streak
     }
 
+    /**
+     * 某个时间区间的歌曲明细（活跃度图表点柱子后展示）
+     *
+     * 优先用 events 里的 spans 与区间求交（精确到秒）；明细已被保留策略清掉时，
+     * 退化为"按天聚合"（只有整天落在区间内才计入，避免把跨界的时长算整）。
+     */
+    @Synchronized
+    fun trackDetailsInRange(fromMs: Long, toMs: Long): List<RangeDetailRow> {
+        ensureLoaded()
+        val dir = dataDir ?: return ArrayList()
+        if (toMs <= fromMs) return ArrayList()
+        val out = HashMap<String, RangeDetailRow>()
+        val zone = java.time.ZoneId.systemDefault()
+        val fromDay = java.time.Instant.ofEpochMilli(fromMs).atZone(zone).toLocalDate()
+        val toDay = java.time.Instant.ofEpochMilli(toMs).atZone(zone).toLocalDate()
+        var sawEvents = false
+        var day = fromDay.minusDays(1)
+        val eventsDir = File(dir, EVENTS_DIR)
+        while (!day.isAfter(toDay)) {
+            val file = File(eventsDir, day.toString() + ".jsonl")
+            if (file.isFile) {
+                sawEvents = true
+                try {
+                    val reader = Files.newBufferedReader(file.toPath(), Charsets.UTF_8)
+                    try {
+                        while (true) {
+                            val line = reader.readLine()
+                            if (line == null) break
+                            if (line.isBlank()) continue
+                            val event = PlayEvent.fromJsonLine(line)
+                            if (event == null) continue
+                            val spans = normalizedSpans(event)
+                            var total = 0L
+                            var si = 0
+                            while (si + 1 < spans.size) {
+                                val start = spans[si]
+                                val end = start + spans[si + 1]
+                                val overlapStart = if (start > fromMs) start else fromMs
+                                val overlapEnd = if (end < toMs) end else toMs
+                                if (overlapEnd > overlapStart) total += overlapEnd - overlapStart
+                                si += 2
+                            }
+                            if (total <= 0L) continue
+                            val key = TrackDict.keyOf(event.id, event.path)
+                            if (key.isEmpty()) continue
+                            var row = out[key]
+                            if (row == null) {
+                                row = RangeDetailRow(key)
+                                row.title = event.title
+                                row.artist = event.artist
+                                out[key] = row
+                            }
+                            row.ms += total
+                            // 计次：这一遍的第一段起点落在选中区间内才算
+                            if (spans.size >= 2 && spans[0] >= fromMs && spans[0] < toMs) row.count++
+                        }
+                    } finally {
+                        reader.close()
+                    }
+                } catch (t: Throwable) {
+                    System.err.println("[listen-stats] 读取区间明细失败: " + t.message)
+                }
+            }
+            day = day.plusDays(1)
+        }
+        if (!sawEvents) {
+            // 明细已被归档：退化为按天聚合
+            var d2 = fromDay
+            while (!d2.isAfter(toDay)) {
+                val perDay = dayTracks[d2.toString()]
+                if (perDay != null) {
+                    for (dt in perDay.values) {
+                        var row = out[dt.key]
+                        if (row == null) {
+                            row = RangeDetailRow(dt.key)
+                            row.title = dt.title
+                            row.artist = dt.artist
+                            out[dt.key] = row
+                        }
+                        row.ms += dt.listenedMs
+                        row.count += dt.count
+                    }
+                }
+                d2 = d2.plusDays(1)
+            }
+        }
+        // 补全标题/艺术家（事件里可能为空，字典里更全）
+        for (row in out.values) {
+            val entry = TrackDict.get(row.key)
+            if (entry != null) {
+                if (row.title.isEmpty()) row.title = entry.title
+                if (row.artist.isEmpty()) row.artist = entry.artist
+            }
+        }
+        val list = ArrayList<RangeDetailRow>(out.values)
+        list.sortWith(Comparator { a, b -> b.ms.compareTo(a.ms) })
+        return list
+    }
+
+    /**
+     * 热力图色阶基准：近 12 个月非零收听日的四分位
+     *
+     * 基准与"当前查看的年份"无关，所以切年份时颜色稳定、跨年可比；
+     * 样本不足 30 天时退化为"全部数据最大值等距"，避免分位数抖动。
+     */
+    @Synchronized
+    fun heatmapBaseline(todayKey: String): HeatmapBaseline {
+        ensureLoaded()
+        val cutoff = try {
+            LocalDate.parse(todayKey).minusMonths(12).toString()
+        } catch (t: Throwable) {
+            "0000-00-00"
+        }
+        val samples = ArrayList<Long>(512)
+        for (entry in days.entries) {
+            if (entry.key < cutoff) continue
+            val ms = entry.value.listenedMs
+            if (ms > 0L) samples.add(ms)
+        }
+        if (samples.size < 30) {
+            var max = 0L
+            for (entry in days.entries) {
+                if (entry.value.listenedMs > max) max = entry.value.listenedMs
+            }
+            return HeatmapBaseline(
+                p25 = max * 25L / 100L,
+                p50 = max * 50L / 100L,
+                p75 = max * 75L / 100L,
+                fallback = true,
+                sampleDays = samples.size
+            )
+        }
+        samples.sort()
+        val n = samples.size
+        return HeatmapBaseline(
+            p25 = samples[quarterIndex(n, 1)],
+            p50 = samples[quarterIndex(n, 2)],
+            p75 = samples[quarterIndex(n, 3)],
+            fallback = false,
+            sampleDays = n
+        )
+    }
+
+    private fun quarterIndex(n: Int, quarter: Int): Int {
+        val index = n * quarter / 4
+        return if (index >= n) n - 1 else index
+    }
+
     /** 历史最长连续收听天数 */
     @Synchronized
     fun longestStreak(): Int {

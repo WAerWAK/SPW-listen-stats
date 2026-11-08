@@ -158,6 +158,14 @@ class DayAgg(val date: String) {
 /** 小时分布剖面（次数 + 时长） */
 class HourProfile(val counts: IntArray, val ms: LongArray)
 
+/** 图表选中区间的歌曲明细行 */
+class RangeDetailRow(val key: String) {
+    var title: String = ""
+    var artist: String = ""
+    var ms: Long = 0L
+    var count: Int = 0
+}
+
 /** 某天某曲目的聚合（当天明细用） */
 class DayTrackAgg(val date: String, val key: String) {
     var title: String = ""

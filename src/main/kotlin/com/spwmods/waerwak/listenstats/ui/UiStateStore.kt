@@ -35,6 +35,14 @@ object UiStateStore {
     @Volatile
     private var showMissing: Boolean = true
 
+    /** 概览「累计收听」是否用 h/m/s 三段显示（默认中文「X 小时 X 分」） */
+    @Volatile
+    private var durationHmsOverview: Boolean = false
+
+    /** 榜单时长列是否用 h:mm:ss 显示（默认中文） */
+    @Volatile
+    private var durationHmsRanking: Boolean = false
+
     @Volatile
     private var loaded = false
 
@@ -88,6 +96,26 @@ object UiStateStore {
         writeAll()
     }
 
+    fun loadDurationHmsOverview(): Boolean {
+        ensureLoaded()
+        return durationHmsOverview
+    }
+
+    fun saveDurationHmsOverview(hms: Boolean) {
+        durationHmsOverview = hms
+        writeAll()
+    }
+
+    fun loadDurationHmsRanking(): Boolean {
+        ensureLoaded()
+        return durationHmsRanking
+    }
+
+    fun saveDurationHmsRanking(hms: Boolean) {
+        durationHmsRanking = hms
+        writeAll()
+    }
+
     private fun ensureLoaded() {
         if (loaded) return
         loaded = true
@@ -110,6 +138,10 @@ object UiStateStore {
                     if (me != null) entryEnabled = me.groupValues[1] == "true"
                     val ms = Regex("\"showMissing\"\\s*:\\s*(true|false)").find(text)
                     if (ms != null) showMissing = ms.groupValues[1] == "true"
+                    val mo = Regex("\"durationHmsOverview\"\\s*:\\s*(true|false)").find(text)
+                    if (mo != null) durationHmsOverview = mo.groupValues[1] == "true"
+                    val mr = Regex("\"durationHmsRanking\"\\s*:\\s*(true|false)").find(text)
+                    if (mr != null) durationHmsRanking = mr.groupValues[1] == "true"
                     val mf = Regex("\"fontExtraPercent\"\\s*:\\s*([0-9]+)").find(text)
                     if (mf != null) {
                         val v = mf.groupValues[1].toIntOrNull()
@@ -137,6 +169,8 @@ object UiStateStore {
                     ",\"contentPercent\":" + contentPercent +
                     ",\"entryEnabled\":" + entryEnabled +
                     ",\"showMissing\":" + showMissing +
+                    ",\"durationHmsOverview\":" + durationHmsOverview +
+                    ",\"durationHmsRanking\":" + durationHmsRanking +
                     ",\"fontExtraPercent\":" + fontExtraPercent + "}"
             )
         } catch (t: Throwable) {

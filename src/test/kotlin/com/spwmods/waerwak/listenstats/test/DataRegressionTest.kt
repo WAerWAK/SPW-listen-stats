@@ -908,6 +908,48 @@ fun main() {
         dir1.deleteRecursively()
     }
 
+    test("热力图色阶按四分位基准分档") {
+        val baseline = com.spwmods.waerwak.listenstats.stats.HeatmapBaseline(10, 20, 30, false, 100)
+        check(com.spwmods.waerwak.listenstats.stats.HeatmapScale.level(0L, baseline) == 0, "无收听应为 0 档")
+        check(com.spwmods.waerwak.listenstats.stats.HeatmapScale.level(5L, baseline) == 1, "低于 P25 应为 1 档")
+        check(com.spwmods.waerwak.listenstats.stats.HeatmapScale.level(15L, baseline) == 2, "P25~P50 应为 2 档")
+        check(com.spwmods.waerwak.listenstats.stats.HeatmapScale.level(25L, baseline) == 3, "P50~P75 应为 3 档")
+        check(com.spwmods.waerwak.listenstats.stats.HeatmapScale.level(30L, baseline) == 4, "≥P75 应为 4 档")
+    }
+
+    test("图表区间明细按 spans 求交") {
+        val dir = freshEnv()
+        val item = track("range-detail", title = "区间歌")
+        SessionTracker.onTrack(item)
+        SessionTracker.onPlayingChanged(true)
+        playFor(item, 0L, 60 * SECOND)
+        SessionTracker.flush()
+        Thread.sleep(400L)
+        // 测试用假时钟（2026-10-19 23:59:30），事件区间落在假时间里
+        val base = localMillis(2026, 10, 19, 23, 59, 30)
+        val rows = StatsStore.trackDetailsInRange(base - 10 * MINUTE, base + 5 * MINUTE)
+        check(rows.isNotEmpty(), "区间内应有明细")
+        var matched = false
+        var i = 0
+        while (i < rows.size) {
+            if (rows[i].key == findTrack("range-detail")?.key) matched = true
+            i++
+        }
+        check(matched, "应包含刚播放的曲目")
+        val empty = StatsStore.trackDetailsInRange(base - 100 * 24 * 60 * MINUTE, base - 99 * 24 * 60 * MINUTE)
+        check(empty.isEmpty(), "很久以前的区间不应有明细")
+        dir.deleteRecursively()
+    }
+
+    test("时长单位的 h:mm:ss 格式") {
+        check(com.spwmods.waerwak.listenstats.formatHms(0L) == "0:00", "0 秒：" + com.spwmods.waerwak.listenstats.formatHms(0L))
+        check(com.spwmods.waerwak.listenstats.formatHms(65_000L) == "1:05", "65 秒应显示 1:05")
+        check(com.spwmods.waerwak.listenstats.formatHms(3_725_000L) == "1:02:05", "1 小时 2 分 5 秒")
+        val parts = com.spwmods.waerwak.listenstats.durationPartsHms(3_725_000L)
+        check(parts.size == 3, "h/m/s 应为三段")
+        check(parts[0].first == "1" && parts[1].first == "02" && parts[2].first == "05", "h/m/s 数值")
+    }
+
     println()
     println("结果：通过 " + passed + " / 失败 " + failed)
     cleanup()

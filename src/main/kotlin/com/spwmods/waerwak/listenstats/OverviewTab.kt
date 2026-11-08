@@ -47,11 +47,13 @@ internal fun OverviewTab(tick: Long) {
             GroupHeader("总览")
             Row(Modifier.fillMaxWidth()) {
                 // 累计收听：点击循环切换三种格式
+                val hmsOverview = com.spwmods.waerwak.listenstats.ui.UiStateStore.loadDurationHmsOverview()
                 KpiCellParts(
                     label = "累计收听",
-                    parts = durationParts(snapshot.totalMs, durationMode),
+                    parts = if (hmsOverview) durationPartsHms(snapshot.totalMs)
+                    else durationParts(snapshot.totalMs, durationMode),
                     modifier = Modifier.weight(1f),
-                    onClick = { durationMode = (durationMode + 1) % 3 }
+                    onClick = { if (!hmsOverview) durationMode = (durationMode + 1) % 3 }
                 )
                 KpiNumberCell("总播放次数", snapshot.totalCount, "", Modifier.weight(1f))
                 KpiNumberCell("曲目数", snapshot.trackCount, "", Modifier.weight(1f))

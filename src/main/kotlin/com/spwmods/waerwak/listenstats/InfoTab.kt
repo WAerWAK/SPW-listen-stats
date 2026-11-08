@@ -108,6 +108,14 @@ internal fun InfoTab(
                     ItemRow("插件 ID", snap.pluginId)
                     RowDivider()
                     ItemRow("渠道", snap.channel)
+                    RowDivider()
+                    ItemRow("作者", "spwmods")
+                    RowDivider()
+                    ItemRow("开源许可", "Apache License 2.0")
+                    RowDivider()
+                    LinkRow("GitHub", "WAerWAK/SPW-listen-stats") { openUrl(REPO_URL) }
+                    RowDivider()
+                    LinkRow("Steam 创意工坊", "听歌统计 · 3822834646") { openUrl(WORKSHOP_URL) }
                 }
                 Spacer(Modifier.height(12.dp))
                 // ------------------------------------------------ 采集（采集规则 + 实时状态）
@@ -174,6 +182,26 @@ internal fun InfoTab(
                             }
                         }
                     }
+                    RowDivider()
+                    val hmsOverview = remember { mutableStateOf(com.spwmods.waerwak.listenstats.ui.UiStateStore.loadDurationHmsOverview()) }
+                    ToggleRow(
+                        label = "概览时长用 h/m/s",
+                        checked = hmsOverview.value,
+                        onToggle = { hms ->
+                            hmsOverview.value = hms
+                            com.spwmods.waerwak.listenstats.ui.UiStateStore.saveDurationHmsOverview(hms)
+                        }
+                    )
+                    RowDivider()
+                    val hmsRanking = remember { mutableStateOf(com.spwmods.waerwak.listenstats.ui.UiStateStore.loadDurationHmsRanking()) }
+                    ToggleRow(
+                        label = "榜单时长用 h:mm:ss",
+                        checked = hmsRanking.value,
+                        onToggle = { hms ->
+                            hmsRanking.value = hms
+                            com.spwmods.waerwak.listenstats.ui.UiStateStore.saveDurationHmsRanking(hms)
+                        }
+                    )
                     RowDivider()
                     // 缺失曲目默认显示；关掉只是从榜单里隐藏，不影响统计与顶部 KPI
                     val showMissingState = remember { mutableStateOf(!MissingStore.hidden) }
@@ -260,10 +288,14 @@ internal fun InfoTab(
                         onClick = onEditRetention
                     )
                     RowDivider()
-                    Column(Modifier.padding(vertical = 6.dp)) {
-                        Text("数据目录", fontSize = SaltDesign.fontSizeMain, color = p.text)
-                        Spacer(Modifier.height(4.dp))
-                        Text(dir, fontSize = SaltDesign.fontSizeSub, color = p.subText)
+                    Row(Modifier.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("数据目录", fontSize = SaltDesign.fontSizeMain, color = p.text)
+                            Spacer(Modifier.height(4.dp))
+                            Text(dir, fontSize = SaltDesign.fontSizeSub, color = p.subText)
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        SmallButton("复制", true) { copyToClipboard(dir) }
                     }
                 }
                 Spacer(Modifier.height(12.dp))
@@ -570,6 +602,38 @@ internal fun hookHealth(): Pair<Boolean, String> {
     return Pair(healthy, sb.toString())
 }
 
+
+/** 仓库与工坊地址（信息页展示用；点击调系统浏览器，插件自身不联网） */
+private const val REPO_URL = "https://github.com/WAerWAK/SPW-listen-stats"
+private const val WORKSHOP_URL = "https://steamcommunity.com/sharedfiles/filedetails/?id=3822834646"
+
+/** 用系统默认浏览器打开链接；失败时把地址复制给用户 */
+private fun openUrl(url: String) {
+    try {
+        if (java.awt.Desktop.isDesktopSupported()) {
+            java.awt.Desktop.getDesktop().browse(java.net.URI(url))
+            return
+        }
+    } catch (t: Throwable) {
+        // 掉到复制
+    }
+    copyToClipboard(url)
+}
+
+/** 一行「标签 + 值 + 打开」的信息行 */
+@Composable
+private fun LinkRow(label: String, value: String, onClick: () -> Unit) {
+    val p = LocalSaltPalette.current
+    Row(
+        Modifier.fillMaxWidth().height(34.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, fontSize = SaltDesign.fontSizeMain, color = p.text, modifier = Modifier.weight(1f))
+        Text(value, fontSize = SaltDesign.fontSizeSub, color = p.subText)
+        Spacer(Modifier.width(8.dp))
+        SmallButton("打开", true, onClick)
+    }
+}
 
 /** 计时诊断一行：丢步数 / 最大回调空档 / 首个回调时的播放态 */
 private fun timingDiagnosticsText(): String {

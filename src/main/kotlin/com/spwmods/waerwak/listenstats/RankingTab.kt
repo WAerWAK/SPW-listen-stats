@@ -43,6 +43,11 @@ import com.spwmods.waerwak.listenstats.ui.MissingState
 import com.spwmods.waerwak.listenstats.ui.SaltDesign
 import java.time.LocalDate
 
+/** 榜单时长列：按「信息 → 显示 → 榜单时长用 h:mm:ss」决定格式 */
+private fun formatRankDuration(ms: Long): String {
+    return if (com.spwmods.waerwak.listenstats.ui.UiStateStore.loadDurationHmsRanking()) formatHms(ms) else formatMs(ms)
+}
+
 @Composable
 internal fun RankingTab(tick: Long) {
     var kind by remember { mutableStateOf(0) }
@@ -262,7 +267,7 @@ internal fun TrackListView(
                     title = t.title.ifBlank { "未知曲目" },
                     summary = t.artist + (if (t.album.isBlank()) "" else " · " + t.album),
                     count = t.count.toString() + " 次",
-                    duration = formatMs(t.listenedMs),
+                    duration = formatRankDuration(t.listenedMs),
                     skip = if (t.skipCount > 0) t.skipCount.toString() + " 次" else "-",
                     lastPlayed = formatLastPlayed(t.lastPlayed),
                     trackKey = t.key,
@@ -317,7 +322,7 @@ internal fun AggregateListView(
                         row.trackCount.toString() + " 首曲目"
                     },
                     count = row.count.toString() + " 次",
-                    duration = formatMs(row.listenedMs),
+                    duration = formatRankDuration(row.listenedMs),
                     skip = if (row.skipCount > 0) row.skipCount.toString() + " 次" else "-",
                     lastPlayed = formatLastPlayed(row.lastPlayed),
                     trackKey = "",

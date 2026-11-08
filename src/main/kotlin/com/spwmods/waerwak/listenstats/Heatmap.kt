@@ -99,23 +99,10 @@ internal fun ActivityHeatmap(
     val fullEnd = lastDate.plusDays((7 - lastDate.dayOfWeek.value).toLong())
     val fullWeeks = ((fullEnd.toEpochDay() - fullStart.toEpochDay()) / 7L).toInt() + 1
 
-    // 动态色阶上限：当前显示范围内「收听时长最高的那一天」
-    // 这样无论每天听几分钟还是几小时，热力图总有完整的深浅层次
-    val highMs = remember(tick, yearMode) {
-        var best = 0L
-        for (entry in daily.entries) {
-            val date = try {
-                LocalDate.parse(entry.key)
-            } catch (t: Throwable) {
-                continue
-            }
-            if (date.isBefore(fullStart) || date.isAfter(fullEnd)) continue
-            if (date.isAfter(today)) continue
-            if (yearMode >= 0 && date.year != yearMode) continue
-            val ms = entry.value.listenedMs
-            if (ms > best) best = ms
-        }
-        best
+    // 色阶基准：近 12 个月非零收听日的四分位（与当前查看的年份无关）
+    // 这样切年份颜色不会变、跨年可比，也不会被某一天的极端值把整年压成一个色
+    val baseline = remember(tick) {
+        com.spwmods.waerwak.listenstats.stats.StatsStore.heatmapBaseline(today.toString())
     }
 
     // 出现动画：格子按列从左到右依次展开；切换年份 / 日期范围时重播
@@ -380,7 +367,7 @@ internal fun ActivityHeatmap(
                                                     val key = date.toString()
                                                     val agg = daily[key]
                                                     val ms = if (agg == null) 0L else agg.listenedMs
-                                                    val level = HeatmapScale.level(ms, highMs)
+                                                    val level = HeatmapScale.level(ms, baseline)
                                                     drawRoundRect(
                                                         color = heatColor(level, p.isDark),
                                                         topLeft = Offset(x, y),
@@ -482,10 +469,39 @@ internal fun ActivityHeatmap(
                 }
             }
         }
+        Spacer(Modifier.height(8.dp))
+        // 图例：四档实际区间（基准是近 12 个月四分位，颜色不再等距对应分钟数）
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            var lv = 0
+            while (lv <= 4) {
+                Box(
+                    Modifier
+                        .width(11.dp)
+                        .height(11.dp)
+                        .drawBehind {
+                            drawRoundRect(
+                                color = heatColor(lv, p.isDark),
+                                cornerRadius = androidx.compose.ui.geometry.CornerRadius(2f, 2f)
+                            )
+                        }
+                )
+                Spacer(Modifier.width(3.dp))
+                lv++
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(legendText(baseline), fontSize = SaltDesign.fontSizeSub, color = p.subText)
+        }
     }
 }
 
-
+/** 图例文案：三档边界（按分钟四舍五入展示） */
+private fun legendText(baseline: com.spwmods.waerwak.listenstats.stats.HeatmapBaseline): String {
+    val p25 = formatMs(baseline.p25)
+    val p50 = formatMs(baseline.p50)
+    val p75 = formatMs(baseline.p75)
+    val note = if (baseline.fallback) "（样本不足，按最大值等距）" else "（近 12 个月四分位）"
+    return "<" + p25 + " · <" + p50 + " · <" + p75 + " · ≥" + p75 + note
+}
 
 /** 热力图配色：按「当天收听时长」档位（0=无，1–4 递增）而非次数 */
 internal fun heatColor(level: Int, dark: Boolean): Color {

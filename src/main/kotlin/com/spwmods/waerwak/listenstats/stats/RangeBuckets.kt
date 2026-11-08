@@ -25,7 +25,10 @@ class Bucket(
     /** 悬停标题（完整描述） */
     val title: String,
     val ms: Long,
-    val count: Int
+    val count: Int,
+    /** 这根柱子覆盖的时间区间（epoch ms），用于「点柱子看歌曲明细」 */
+    val startMs: Long = 0L,
+    val endMs: Long = 0L
 )
 
 object RangeBuckets {
@@ -105,8 +108,11 @@ object RangeBuckets {
         daily: Map<String, DayAgg>
     ): List<Bucket> {
         val days = dayCount(from, to)
+        val zone = java.time.ZoneId.systemDefault()
+        fun dayStart(date: LocalDate): Long = date.atStartOfDay(zone).toInstant().toEpochMilli()
         val out = ArrayList<Bucket>(32)
         if (days <= 1 && hourly != null) {
+            val base = dayStart(from)
             var h = 0
             while (h < 24) {
                 out.add(
@@ -114,7 +120,9 @@ object RangeBuckets {
                         label = h.toString(),
                         title = h.toString() + " 点",
                         ms = hourly.ms[h],
-                        count = hourly.counts[h]
+                        count = hourly.counts[h],
+                        startMs = base + h * 3_600_000L,
+                        endMs = base + (h + 1) * 3_600_000L
                     )
                 )
                 h++
@@ -125,12 +133,15 @@ object RangeBuckets {
             var d = from
             while (!d.isAfter(to)) {
                 val agg = daily[d.toString()]
+                val start = dayStart(d)
                 out.add(
                     Bucket(
                         label = (d.monthValue).toString() + "-" + d.dayOfMonth,
                         title = d.toString(),
                         ms = if (agg == null) 0L else agg.listenedMs,
-                        count = if (agg == null) 0 else agg.count
+                        count = if (agg == null) 0 else agg.count,
+                        startMs = start,
+                        endMs = dayStart(d.plusDays(1))
                     )
                 )
                 d = d.plusDays(1)
@@ -161,7 +172,9 @@ object RangeBuckets {
                         label = cursor.monthValue.toString() + "-" + cursor.dayOfMonth,
                         title = cursor.toString() + " ~ " + weekEnd.toString(),
                         ms = ms,
-                        count = count
+                        count = count,
+                        startMs = dayStart(cursor),
+                        endMs = dayStart(cursor.plusDays(7))
                     )
                 )
                 cursor = cursor.plusDays(7)
@@ -191,7 +204,9 @@ object RangeBuckets {
                     label = month.monthValue.toString() + " 月",
                     title = month.year.toString() + " 年 " + month.monthValue + " 月",
                     ms = ms,
-                    count = count
+                    count = count,
+                    startMs = dayStart(month),
+                    endMs = dayStart(month.plusMonths(1))
                 )
             )
             month = month.plusMonths(1)
