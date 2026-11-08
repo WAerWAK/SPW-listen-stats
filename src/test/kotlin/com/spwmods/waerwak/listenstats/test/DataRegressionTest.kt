@@ -287,7 +287,9 @@ fun main() {
             "{\"v\":1,\"ms\":" + (2 * MINUTE) +
                 ",\"t\":" + (fakeWall - 2 * MINUTE) +
                 ",\"dur\":" + (4 * MINUTE) +
-                ",\"c\":true,\"savedAt\":" + fakeWall +
+                // savedAt 必须是真实时间：LiveSessionStore 用 System.currentTimeMillis() 判 7 天过期，
+                // 用假时钟（2026-10-19）会被当成过期残留而丢弃
+                ",\"c\":true,\"savedAt\":" + System.currentTimeMillis() +
                 ",\"id\":\"recover\",\"ti\":\"恢复测试\",\"ar\":\"测试歌手\",\"al\":\"测试专辑\"}",
             Charsets.UTF_8
         )
