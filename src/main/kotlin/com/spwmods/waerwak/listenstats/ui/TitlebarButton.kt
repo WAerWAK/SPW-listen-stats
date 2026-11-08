@@ -52,9 +52,9 @@ object TitlebarButton {
     /** 宿主 caption 按钮默认宽度（px） */
     private const val CAPTION_WIDTH_PX = 32
 
-    /** 当前宿主版本的注入目标（install 时写入） */
+    /** 当前宿主版本的注入目标（install 时写入；未适配版本为 null，不会安装） */
     @Volatile
-    private var targets: HostUiTargets = HostUiTargets.forVersion("")
+    private var targets: HostUiTargets? = null
 
     private var handle: HookHandle? = null
 
@@ -100,6 +100,10 @@ object TitlebarButton {
     fun install(spwVersion: String): Boolean {
         if (handle != null) return true
         val t = HostUiTargets.forVersion(spwVersion)
+        if (t == null) {
+            lastError = "未适配的宿主版本（" + spwVersion + "）"
+            return false
+        }
         targets = t
         return try {
             // 复用宿主组件时提前解析签名：不支持就尽早失败，不影响主统计 hook
@@ -132,7 +136,8 @@ object TitlebarButton {
 
     @Composable
     private fun TitlebarEntry() {
-        if (!targets.reuseHostCaption) {
+        val t = targets
+        if (t == null || !t.reuseHostCaption) {
             FallbackEntry()
             return
         }

@@ -4,7 +4,8 @@ package com.spwmods.waerwak.listenstats.ui
  * 宿主 UI 注入目标
  *
  * SPW 每次更新都会重排混淆名（连 patch 版本也会变），所以这里按宿主版本给出目标，
- * 不再把类名写死在调用点。新增宿主版本时在这里加一条即可。
+ * 不再把类名写死在调用点。新增宿主版本时在这里加一条即可；
+ * 未登记的版本不注入（见 [forVersion]），避免用旧目标盲猜。
  *
  * 参考 Jethuit/SPW-Listen-Stats 的 HostUiTargets 做法。
  */
@@ -40,15 +41,32 @@ data class HostUiTargets(
         )
 
         /**
-         * 取对应版本的注入目标
+         * SPW 1.19.3：宿主再次重排混淆名，1.19.1 的三个目标全部失效
          *
-         * 未适配的版本回退到最近已知的一组（比直接失效好），
-         * 失败会在信息页诊断里显示具体类名异常。
+         * 三者均由宿主 jar 的字节码实测得到（javap）：
+         * - pageCaller：AppNavigationKt.AppNavigation 的唯一外部调用类（类内调用点计数 = 1）
+         * - titlebarCaller：标题栏里 `ݕ` 的唯一调用类
+         * - debugCaption：标题栏 Quick 前一个零参 composable
          */
-        fun forVersion(version: String): HostUiTargets = when {
+        private val V1193 = HostUiTargets(
+            pageCaller = "androidx.compose.ui.\u024e",
+            titlebarCaller = "androidx.compose.ui.\u0a88",
+            debugCaption = "androidx.compose.ui.\u0755",
+            reuseHostCaption = true
+        )
+
+        /**
+         * 取对应版本的注入目标；未适配的版本返回 null
+         *
+         * 刻意**不回退**到最近已知的一组：混淆名在宿主里会指向完全不同的类，
+         * 盲猜的结果是控制台里一句难懂的 ambiguous / 0 calls，甚至注入到错误的位置。
+         * 返回 null 时调用方跳过 UI 注入，并在信息页/日志里给出明确提示——采集与统计不受影响。
+         */
+        fun forVersion(version: String): HostUiTargets? = when {
             version.startsWith("1.19.0") -> V1190
             version.startsWith("1.19.1") -> V1191
-            else -> V1191
+            version.startsWith("1.19.3") -> V1193
+            else -> null
         }
     }
 }

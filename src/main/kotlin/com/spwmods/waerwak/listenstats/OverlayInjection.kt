@@ -205,8 +205,15 @@ object OverlayInjection {
             lastError = "未授予 CLASS_TRANSFORM"
             return "失败：未授予 CLASS_TRANSFORM 权限"
         }
-        // 混淆名随宿主版本变化：按当前宿主版本取注入目标
-        val uiTargets = com.spwmods.waerwak.listenstats.ui.HostUiTargets.forVersion(hostVersion())
+        // 混淆名随宿主版本变化：按当前宿主版本取注入目标；未登记的版本一律不猜
+        val hostVer = hostVersion()
+        val uiTargets = com.spwmods.waerwak.listenstats.ui.HostUiTargets.forVersion(hostVer)
+        if (uiTargets == null) {
+            val shown = if (hostVer.isEmpty()) "未知" else hostVer
+            lastError = "未适配的宿主版本 " + shown
+            writeDiag("install", "unsupported host=" + shown + "  skip-ui-injection（采集不受影响）")
+            return "未适配当前宿主版本（" + shown + "）：面板与顶栏入口暂不可用，听歌数据仍会正常记录"
+        }
         return try {
             handle = WorkshopApi.hookRegistrar.afterComposable(
                 className = TARGET_CLASS,
