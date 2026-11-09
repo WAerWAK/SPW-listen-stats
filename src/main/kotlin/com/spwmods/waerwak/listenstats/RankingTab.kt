@@ -272,7 +272,11 @@ internal fun TrackListView(
                     lastPlayed = formatLastPlayed(t.lastPlayed),
                     trackKey = t.key,
                     badge = missingBadgeOf(t.key),
-                    onClick = { key -> TrackDetailState.open.value = key }
+                    onClick = { key -> TrackDetailState.open.value = key },
+                    onDoubleClick = {
+                        if (t.id.isNotBlank()) HostSongPlayback.playById(t.id)
+                        else toast("这首歌曲缺少标识，无法播放", false)
+                    }
                 )
                 i++
             }

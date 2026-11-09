@@ -26,6 +26,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,6 +53,8 @@ import com.spwmods.waerwak.listenstats.stats.MissingStore
 import com.spwmods.waerwak.listenstats.ui.LocalSaltPalette
 import com.spwmods.waerwak.listenstats.ui.SaltDesign
 import com.spwmods.waerwak.listenstats.ui.rememberCover
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.time.LocalDate
 import java.util.Date
@@ -459,19 +462,18 @@ internal fun ListRow(
     trackKey: String,
     badge: String = "",
     onClick: (String) -> Unit,
-    onRowClick: (() -> Unit)? = null
+    onRowClick: (() -> Unit)? = null,
+    /** 双击曲目（仅歌曲行提供）：用于直接播放 */
+    onDoubleClick: (() -> Unit)? = null
 ) {
-    Surface(
-        onClick = {
-            if (onRowClick != null) {
-                onRowClick()
-            } else if (trackKey.isNotBlank()) {
-                onClick(trackKey)
-            }
-        },
-        color = Color.Transparent,
-        modifier = Modifier.fillMaxWidth()
-    ) {
+    val tap: () -> Unit = {
+        if (onRowClick != null) {
+            onRowClick()
+        } else if (trackKey.isNotBlank()) {
+            onClick(trackKey)
+        }
+    }
+    val rowContent: @Composable () -> Unit = {
         Row(Modifier.fillMaxWidth().height(50.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 rank.toString(),
@@ -507,10 +509,43 @@ internal fun ListRow(
             }
         }
     }
+    if (onDoubleClick != null) {
+        // 双击播放：宿主裁掉了 detectTapGestures，这里用 Press 事件自己判双击。
+        // 单击详情延迟约 420ms 执行（等双击窗口），双击则立即播放并取消单击。
+        val scope = androidx.compose.runtime.rememberCoroutineScope()
+        var pending by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+        var lastTapAt = remember { longArrayOf(0L) }
+        Surface(
+            color = Color.Transparent,
+            modifier = Modifier.fillMaxWidth().onPointerEvent(PointerEventType.Press) {
+                val now = System.currentTimeMillis()
+                if (now - lastTapAt[0] < 420L) {
+                    lastTapAt[0] = 0L
+                    pending?.cancel()
+                    pending = null
+                    onDoubleClick()
+                } else {
+                    lastTapAt[0] = now
+                    pending?.cancel()
+                    pending = scope.launch {
+                        kotlinx.coroutines.delay(420L)
+                        tap()
+                    }
+                }
+            }
+        ) {
+            rowContent()
+        }
+    } else {
+        Surface(
+            onClick = { tap() },
+            color = Color.Transparent,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            rowContent()
+        }
+    }
 }
-
-
-
 
 @Composable
 internal fun Pager(

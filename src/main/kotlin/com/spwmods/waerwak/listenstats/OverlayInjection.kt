@@ -107,6 +107,13 @@ object OverlayInjection {
     /** 配置页请求打开面板时指定的初始页（-1 表示不指定） */
     val pendingTab = mutableStateOf(-1)
 
+    /** 上次停留的页面：鼠标前进恢复面板时回到同一页 */
+    val lastTab = mutableStateOf(0)
+
+    /** 面板是"被返回键关掉"的：下一次前进把它恢复回来（鼠标前进侧键） */
+    @Volatile
+    private var forwardRestorePending = false
+
     /** 快捷键入口：没有面板就装一下，有则开关 */
     fun togglePanel() {
         if (handle == null) {
@@ -381,6 +388,7 @@ object OverlayInjection {
             // 导航感知：切页时关面板，返回键优先关弹层/面板（失败不影响主功能）
             com.spwmods.waerwak.listenstats.ui.NavigationHook.install(
                 onPageChange = {
+                    forwardRestorePending = false
                     if (panelOpen.value) closePanel()
                 },
                 onBack = {
@@ -389,8 +397,21 @@ object OverlayInjection {
                         true
                     } else if (panelOpen.value) {
                         closePanel()
+                        // 记录"这次关闭来自返回键"：鼠标前进侧键可以把它恢复回来
+                        forwardRestorePending = true
                         true
                     } else {
+                        forwardRestorePending = false
+                        false
+                    }
+                },
+                onForward = {
+                    if (forwardRestorePending && !panelOpen.value) {
+                        forwardRestorePending = false
+                        panelOpen.value = true
+                        true
+                    } else {
+                        forwardRestorePending = false
                         false
                     }
                 }

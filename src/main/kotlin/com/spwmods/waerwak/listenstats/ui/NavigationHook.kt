@@ -20,6 +20,7 @@ import com.xuncorp.spw.workshop.api.hook.MethodHookParam
  *
  * @param onPageChange 导航到其它页面
  * @param onBack 宿主触发返回；返回 true 表示已被消费（原方法不执行）
+ * @param onForward 宿主触发前进（含鼠标前进侧键）；返回 true 表示已被消费（用于恢复统计面板）
  */
 @OptIn(UnstableSpwWorkshopApi::class)
 object NavigationHook {
@@ -37,7 +38,11 @@ object NavigationHook {
         get() = handles.isNotEmpty()
 
     @Synchronized
-    fun install(onPageChange: () -> Unit, onBack: () -> Boolean): Boolean {
+    fun install(
+        onPageChange: () -> Unit,
+        onBack: () -> Boolean,
+        onForward: (() -> Boolean)? = null
+    ): Boolean {
         if (handles.isNotEmpty()) return true
         val registrar = try {
             WorkshopApi.hookRegistrar
@@ -61,6 +66,17 @@ object NavigationHook {
             handles.add(registrar.hookMethod(NAVIGATOR_CLASS, "replace", routeParams, pageChange))
             handles.add(registrar.hookMethod(NAVIGATOR_CLASS, "forward", object : MethodHook() {
                 override fun before(call: MethodHookParam) {
+                    // 前进优先用于恢复面板（鼠标前进侧键也会走宿主这个方法）；
+                    // 其余情况仍按"换页关面板"处理。
+                    val consumed = try {
+                        onForward?.invoke() ?: false
+                    } catch (t: Throwable) {
+                        false
+                    }
+                    if (consumed) {
+                        call.setResult(null)
+                        return
+                    }
                     try {
                         onPageChange()
                     } catch (t: Throwable) {

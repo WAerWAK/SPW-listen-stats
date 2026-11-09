@@ -425,12 +425,13 @@ internal object EscGate {
 
 @Composable
 internal fun StatsOverlay(onClose: () -> Unit) {
-    var tab by remember { mutableStateOf(0) }
+    var tab by remember { mutableStateOf(OverlayInjection.lastTab.value) }
     // 配置页 / 顶栏按钮可以指定打开哪一页；用 State 订阅，面板已打开时也能切过去
     val pendingTab = OverlayInjection.pendingTab.value
     LaunchedEffect(pendingTab) {
         if (pendingTab >= 0) {
             tab = pendingTab
+            OverlayInjection.lastTab.value = pendingTab
             OverlayInjection.pendingTab.value = -1
         }
     }
@@ -566,7 +567,10 @@ internal fun StatsOverlay(onClose: () -> Unit) {
             Column(Modifier.width(contentW)) {
                 HeaderBar(onClose = onClose, onRefresh = { tick = tick + 1 })
                 Spacer(Modifier.height(12.dp))
-                TabBar(selected = tab, onSelect = { tab = it })
+                TabBar(selected = tab, onSelect = {
+            tab = it
+            OverlayInjection.lastTab.value = it
+        })
                 Spacer(Modifier.height(14.dp))
                 Box(Modifier.fillMaxWidth().weight(1f)) {
                     // 四页切换：按 Tab 顺序做水平位移 ——

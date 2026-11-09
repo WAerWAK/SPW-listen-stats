@@ -1197,6 +1197,27 @@ fun main() {
         TimingDiag.clear()
     }
 
+    test("宿主单曲播放结构校验（真实宿主 jar）") {
+        val jarPath = System.getProperty("spw.host.jar")
+        if (jarPath == null || !File(jarPath).isFile) {
+            println("    （跳过：未提供宿主 jar）")
+        } else {
+            val loader = java.net.URLClassLoader(
+                arrayOf(File(jarPath).toURI().toURL()),
+                ClassLoader.getSystemClassLoader()
+            )
+            try {
+                com.spwmods.waerwak.listenstats.HostSongPlayback.loaderOverride = loader
+                val song = track("play-reflect", durationMs = 3 * MINUTE)
+                val action = com.spwmods.waerwak.listenstats.HostSongPlayback.prepare(song)
+                check(action != null, "宿主结构校验应通过并返回播放动作")
+            } finally {
+                com.spwmods.waerwak.listenstats.HostSongPlayback.loaderOverride = null
+                loader.close()
+            }
+        }
+    }
+
     test("时长单位的 h:mm:ss 格式") {
         check(com.spwmods.waerwak.listenstats.formatHms(0L) == "0:00", "0 秒：" + com.spwmods.waerwak.listenstats.formatHms(0L))
         check(com.spwmods.waerwak.listenstats.formatHms(65_000L) == "1:05", "65 秒应显示 1:05")

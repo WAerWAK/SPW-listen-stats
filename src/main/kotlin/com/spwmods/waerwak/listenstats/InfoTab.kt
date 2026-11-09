@@ -470,7 +470,7 @@ private fun AdvancedSection(title: String) {
             fontSize = SaltDesign.fontSizeSectionTitle,
             fontWeight = SaltDesign.weightSectionTitle,
             lineHeight = 22.sp,
-            color = LocalSaltPalette.current.text
+            color = LocalSaltPalette.current.labelAccent
         )
     }
 }
