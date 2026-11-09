@@ -132,9 +132,17 @@ object SessionTracker {
         val fresh = Session(key, meta)
         fresh.lastNano = nanoClock()
         fresh.startTimeMs = wallClock()
+        // 权威曲目（TrackResolver 查询到的 MediaItem）通常自带时长，先用它；
+        // 拿不到再异步补查。生产环境两者结果一致（异步补查也会立刻返回），
+        // 但直接使用可以少一次宿主调用、并让计数门槛更早稳定。
+        if (item.duration > 0L) fresh.durationMs = item.duration
         session = fresh
-        if (item.id.isNotBlank()) requestDuration(key, item.id)
+        if (fresh.durationMs <= 0L && item.id.isNotBlank()) requestDuration(key, item.id)
     }
+
+    /** 当前是否已有会话（PlaybackPipeline 用来判断要不要立即解析当前曲目） */
+    @Synchronized
+    internal fun hasSession(): Boolean = session != null
 
     fun onPosition(position: Long) {
         val snap = updatePosition(position) ?: return

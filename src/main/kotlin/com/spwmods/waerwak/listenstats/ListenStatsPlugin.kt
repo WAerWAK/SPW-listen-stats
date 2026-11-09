@@ -37,6 +37,9 @@ class ListenStatsPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext)
             System.err.println("[listen-stats] 恢复会话失败: " + t.message)
         }
 
+        // 播放事件处理线程：曲目解析、计时、快照写盘都在这里，宿主回调只入队
+        com.spwmods.waerwak.listenstats.stats.PlaybackPipeline.start()
+
         // 后台预热统计缓存：首次打开面板不再同步解析 daily/ 与排序
         val warm = Thread({
             try {
@@ -64,7 +67,8 @@ class ListenStatsPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext)
             System.err.println("[listen-stats] 注销快捷键失败: ${t.message}")
         }
         hotkey = null
-        // 结算当前这一遍，然后把写线程排空并释放（重新启用插件时会重建）
+        // 先停播放处理线程（排空队列并结算当前这一遍），再排空写线程
+        com.spwmods.waerwak.listenstats.stats.PlaybackPipeline.stop()
         SessionTracker.flush()
         SessionTracker.shutdown()
         com.spwmods.waerwak.listenstats.stats.StatsStore.shutdown()

@@ -3,11 +3,13 @@ package com.spwmods.waerwak.listenstats.test
 import com.spwmods.waerwak.listenstats.stats.CountRule
 import com.spwmods.waerwak.listenstats.stats.LiveSessionStore
 import com.spwmods.waerwak.listenstats.stats.MissingStore
+import com.spwmods.waerwak.listenstats.stats.PlaybackPipeline
 import com.spwmods.waerwak.listenstats.stats.PlayEvent
 import com.spwmods.waerwak.listenstats.stats.SessionTracker
 import com.spwmods.waerwak.listenstats.stats.StatsStore
 import com.spwmods.waerwak.listenstats.stats.StatsThresholds
 import com.spwmods.waerwak.listenstats.stats.TrackAgg
+import com.spwmods.waerwak.listenstats.stats.TrackResolver
 import com.spwmods.waerwak.listenstats.ui.HostUiTargets
 import com.spwmods.waerwak.listenstats.ui.discovery.HostBytecodeIndex
 import com.spwmods.waerwak.listenstats.ui.discovery.HostUiDiscovery
@@ -77,6 +79,8 @@ private fun freshEnv(
     dir.mkdirs()
     tempRoot = dir
     StatsStore.resetForTesting(dir)
+    PlaybackPipeline.resetForTesting()
+    TrackResolver.resetForTesting()
     SessionTracker.resetForTesting()
     resetClock()
     SessionTracker.nanoClock = { fakeNano }
@@ -308,7 +312,7 @@ fun main() {
     }
 
     test("跨天落盘后重新加载一致") {
-        val dir = freshEnv()
+        val dir = freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 0)
         val item = track("persist")
         SessionTracker.onTrack(item)
         SessionTracker.onPlayingChanged(true)
@@ -497,7 +501,7 @@ fun main() {
     }
 
     test("恢复失败时回滚原数据") {
-        val dir = freshEnv()
+        val dir = freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 0)
         val item = track("keep")
         SessionTracker.onTrack(item)
         SessionTracker.onPlayingChanged(true)
@@ -875,7 +879,7 @@ fun main() {
     }
 
     test("合并导入按会话去重且可重复导入") {
-        val dir1 = freshEnv()
+        val dir1 = freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 0)
         val a = track("merge-a", title = "合并A")
         SessionTracker.onTrack(a)
         SessionTracker.onPlayingChanged(true)
@@ -890,7 +894,7 @@ fun main() {
         val backup = File(dir1, "merge.zip")
         check(StatsStore.backupTo(backup).startsWith("已备份"), "备份应成功")
 
-        val dir2 = freshEnv()
+        val dir2 = freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 0)
         val target = File(dir2, "merge.zip")
         backup.copyTo(target, overwrite = true)
         val first = StatsStore.importMerge(target)
@@ -939,6 +943,93 @@ fun main() {
         val empty = StatsStore.trackDetailsInRange(base - 100 * 24 * 60 * MINUTE, base - 99 * 24 * 60 * MINUTE)
         check(empty.isEmpty(), "很久以前的区间不应有明细")
         dir.deleteRecursively()
+    }
+
+    test("权威曲目解析：节流与强制刷新") {
+        freshEnv()
+        var calls = 0
+        TrackResolver.provider = {
+            calls++
+            track("resolve-" + calls)
+        }
+        val first = TrackResolver.resolve(1_000L, false)
+        check(first != null, "首次应解析成功")
+        TrackResolver.resolve(1_500L, false)
+        check(calls == 1, "未到间隔应复用缓存，实际查询 " + calls)
+        TrackResolver.resolve(1_600L, true)
+        check(calls == 2, "强制刷新应重新查询，实际 " + calls)
+        check(TrackResolver.cachedId() == "resolve-2", "缓存应更新为最新曲目")
+        TrackResolver.resetForTesting()
+    }
+
+    test("多插件环境：没有歌词回调也能正确计时") {
+        // 模拟宿主 loadLyrics 被其它插件短路：本插件收不到任何歌词回调，
+        // 只能靠 PlaybackPipeline 主动解析 getCurrentMediaItem 建会话。
+        freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 0)
+        val item = track("no-lyric", durationMs = 5 * MINUTE)
+        TrackResolver.provider = { item }
+        PlaybackPipeline.start()
+        var i = 0
+        while (i < 31) {
+            advance(SECOND)
+            PlaybackPipeline.onPosition((i + 1) * SECOND)
+            check(PlaybackPipeline.awaitIdleForTesting(2_000L), "队列应在超时内处理完")
+            i++
+        }
+        PlaybackPipeline.stop()
+        Thread.sleep(200L)
+        val agg = findTrack("no-lyric")
+        check(agg != null, "没有歌词回调也应建立会话并记录")
+        checkNear(agg!!.listenedMs, 30 * SECOND, 3 * SECOND, "应记录约 30 秒")
+        PlaybackPipeline.resetForTesting()
+        TrackResolver.resetForTesting()
+    }
+
+    test("多插件环境：歌词回调指向别的曲目也不影响权威会话") {
+        freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 0)
+        val item = track("authority", durationMs = 5 * MINUTE)
+        TrackResolver.provider = { item }
+        PlaybackPipeline.start()
+        var i = 0
+        while (i < 31) {
+            advance(SECOND)
+            // 每 10 秒来一次"歌词提示"，且指向不存在的另一首（模拟其它插件干扰）
+            if (i % 10 == 0) PlaybackPipeline.onLyricHint()
+            PlaybackPipeline.onPosition((i + 1) * SECOND)
+            check(PlaybackPipeline.awaitIdleForTesting(2_000L), "队列应在超时内处理完")
+            i++
+        }
+        PlaybackPipeline.stop()
+        Thread.sleep(200L)
+        val agg = findTrack("authority")
+        check(agg != null, "应以权威曲目记录")
+        checkNear(agg!!.listenedMs, 30 * SECOND, 3 * SECOND, "歌词提示不应改变计时对象")
+        check(findTrack("lyric-hint") == null, "不应凭空出现歌词提示里的曲目")
+        PlaybackPipeline.resetForTesting()
+        TrackResolver.resetForTesting()
+    }
+
+    test("播放中途启用：管线启动时 seed 当前曲目") {
+        freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 0)
+        val item = track("seed", durationMs = 5 * MINUTE)
+        TrackResolver.provider = { item }
+        // 没有任何歌词回调，直接启动管线（模拟插件在播放中途被启用）
+        PlaybackPipeline.start()
+        check(PlaybackPipeline.awaitIdleForTesting(2_000L), "seed 应在超时内完成")
+        var i = 0
+        while (i < 31) {
+            advance(SECOND)
+            PlaybackPipeline.onPosition((i + 1) * SECOND)
+            check(PlaybackPipeline.awaitIdleForTesting(2_000L), "队列应在超时内处理完")
+            i++
+        }
+        PlaybackPipeline.stop()
+        Thread.sleep(200L)
+        val agg = findTrack("seed")
+        check(agg != null, "启用后应立即开始记录当前曲目")
+        checkNear(agg!!.listenedMs, 30 * SECOND, 3 * SECOND, "应记录约 30 秒")
+        PlaybackPipeline.resetForTesting()
+        TrackResolver.resetForTesting()
     }
 
     test("时长单位的 h:mm:ss 格式") {
