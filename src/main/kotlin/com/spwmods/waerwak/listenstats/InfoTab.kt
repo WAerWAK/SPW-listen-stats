@@ -98,7 +98,7 @@ internal fun InfoTab(
                         )
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            "缺失曲目不会自动检测：文件改动后在右侧「数据」组点「检测」才会重新判定",
+                            "缺失曲目不会自动检测：文件改动后在右侧「采集与数据」组点「检测」才会重新判定",
                             fontSize = SaltDesign.fontSizeSub,
                             color = p.subText
                         )
@@ -112,6 +112,8 @@ internal fun InfoTab(
                     RowDivider()
                     ItemRow("版本", snap.pluginVersion)
                     RowDivider()
+                    ItemRow("SPW 版本", snap.spwVersion)
+                    RowDivider()
                     ItemRow("作者", "spwmods")
                     RowDivider()
                     ItemRow("开源许可", "Apache License 2.0")
@@ -119,26 +121,6 @@ internal fun InfoTab(
                     LinkRow("GitHub", "WAerWAK/SPW-listen-stats") { openUrl(REPO_URL) }
                     RowDivider()
                     LinkRow("Steam 创意工坊", "听歌统计 · 3822834646") { openUrl(WORKSHOP_URL) }
-                }
-                Spacer(Modifier.height(12.dp))
-                // ------------------------------------------------ 采集（规则 + 实时状态）
-                SaltGroup {
-                    GroupHeader("采集")
-                    AdjustableRow(
-                        label = "计数门槛",
-                        value = CountRule.describe(),
-                        onClick = onEditThreshold
-                    )
-                    RowDivider()
-                    ItemRow("播放状态", if (snap.isPlaying) "播放中" else "未播放")
-                    RowDivider()
-                    ItemRow("当前曲目", snap.lastTrackText)
-                }
-                Spacer(Modifier.height(12.dp))
-                // ------------------------------------------------ 宿主（只留版本）
-                SaltGroup {
-                    GroupHeader("宿主")
-                    ItemRow("SPW 版本", snap.spwVersion)
                 }
             }
             Column(Modifier.weight(1f)) {
@@ -207,9 +189,16 @@ internal fun InfoTab(
                     )
                 }
                 Spacer(Modifier.height(12.dp))
-                // ------------------------------------------------ 数据（普通用户可操作项）
+                Spacer(Modifier.height(12.dp))
+                // ------------------------------------------------ 采集与数据（合并；普通用户可操作项）
                 SaltGroup {
-                    GroupHeader("数据")
+                    GroupHeader("采集与数据")
+                    AdjustableRow(
+                        label = "计数门槛",
+                        value = CountRule.describe(),
+                        onClick = onEditThreshold
+                    )
+                    RowDivider()
                     ItemRow("曲目数", trackCount.toString() + " 首")
                     RowDivider()
                     // 缺失曲目：手动检测 + 结果持久化（missing.txt），不开面板不会跑
@@ -264,6 +253,7 @@ internal fun InfoTab(
                         SmallButton("复制", true) { copyToClipboard(dir) }
                     }
                 }
+
             }
         }
         Spacer(Modifier.height(12.dp))
@@ -304,6 +294,7 @@ internal fun InfoTab(
                     color = p.subText
                 )
                 RowDivider()
+                AdvancedSection("环境")
                 ItemRow("插件 ID", snap.pluginId)
                 RowDivider()
                 ItemRow("渠道", snap.channel)
@@ -311,6 +302,11 @@ internal fun InfoTab(
                 ItemRow("Kotlin", snap.kotlinVersion)
                 RowDivider()
                 ItemRow("Compose", snap.composeVersion)
+                RowDivider()
+                AdvancedSection("运行状态")
+                ItemRow("播放状态", if (snap.isPlaying) "播放中" else "未播放")
+                RowDivider()
+                ItemRow("当前曲目", snap.lastTrackText)
                 RowDivider()
                 ItemRow("位置回调", snap.positionCallbacks.toString() + " 次")
                 RowDivider()
@@ -326,6 +322,7 @@ internal fun InfoTab(
                     )
                 }
                 RowDivider()
+                AdvancedSection("缺失检测")
                 ItemRow("上次检测", formatDateTime(missingAt))
                 RowDivider()
                 ItemRow(
@@ -333,6 +330,7 @@ internal fun InfoTab(
                     if (MissingState.lastMessage.value.isNotBlank()) MissingState.lastMessage.value else "-"
                 )
                 RowDivider()
+                AdvancedSection("界面与注入")
                 ItemRow("窗口样式", HostAppearance.lastStyleName)
                 RowDivider()
                 ItemRow(
@@ -353,6 +351,7 @@ internal fun InfoTab(
                     }
                 )
                 RowDivider()
+                AdvancedSection("计时与诊断")
                 ItemRow("计时诊断", timingDiagnosticsText())
                 RowDivider()
                 val timingOn = remember { mutableStateOf(com.spwmods.waerwak.listenstats.stats.TimingDiag.enabled) }
@@ -460,6 +459,19 @@ internal fun InfoTab(
         }
     }
 }
+
+/** 高级信息内的小标题：弱化颜色 + 上下留白，用来分区（环境 / 运行状态 / 诊断…） */
+@Composable
+private fun AdvancedSection(title: String) {
+    Column(Modifier.padding(top = 10.dp, bottom = 4.dp)) {
+        Text(
+            title,
+            fontSize = SaltDesign.fontSizeSub,
+            color = LocalSaltPalette.current.labelAccent
+        )
+    }
+}
+
 
 /** 「标签 + 当前值 + 调整按钮」一行（计数门槛 / 明细保留 / 字体大小共用） */
 @Composable
