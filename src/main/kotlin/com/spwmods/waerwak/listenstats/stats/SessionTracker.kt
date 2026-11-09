@@ -2,6 +2,10 @@ package com.spwmods.waerwak.listenstats.stats
 
 import com.xuncorp.spw.workshop.api.PlaybackExtensionPoint
 import com.xuncorp.spw.workshop.api.WorkshopApi
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.Executors
 
 /**
@@ -66,6 +70,12 @@ object SessionTracker {
         var approx: Boolean = false
         /** 上一步的墙钟时间，用来发现系统时钟跳变 */
         var lastWallMs: Long = 0L
+        /** 本遍诊断计数（L1 摘要用） */
+        var acceptedSteps: Long = 0L
+        var sessionClampedSteps: Long = 0L
+        var sessionClampedMs: Long = 0L
+        var sessionDroppedSteps: Long = 0L
+        var sessionMaxGapMs: Long = 0L
     }
 
     private var session: Session? = null
@@ -149,7 +159,12 @@ object SessionTracker {
     internal fun hasSession(): Boolean = session != null
 
     fun onPosition(position: Long) {
-        val snap = updatePosition(position) ?: return
+        val current = session
+        if (current == null) {
+            TimingDiag.record(0, position, 0L, 0L, 0, false, TimingDiag.REASON_NO_SESSION, 0L, 1.0f)
+            return
+        }
+        val snap = updatePosition(current, position) ?: return
         // 崩溃保护的落盘放到锁外：播放回调每秒好多次，不能让它等磁盘
         // （杀软扫描 / 慢盘时会把宿主播放卡住）
         LiveSessionStore.maybeSave(snap)
@@ -157,9 +172,12 @@ object SessionTracker {
 
     /** 更新一遍播放的进度，返回需要落盘的崩溃保护快照 */
     @Synchronized
-    private fun updatePosition(position: Long): LiveSessionStore.Snapshot? {
-        val current = session ?: return null
+    private fun updatePosition(current: Session, position: Long): LiveSessionStore.Snapshot? {
         val now = nanoClock()
+        val monoMs = now / 1_000_000L
+        val speed = PlaybackSpeed.current(monoMs)
+        val playingCode = if (playing == null) 0 else if (playing == true) 1 else 2
+        val trackHash = current.key.hashCode()
         val last = current.lastPosition
         val lastNano = current.lastNano
 
@@ -167,6 +185,7 @@ object SessionTracker {
         if (last < 0L || lastNano <= 0L) {
             current.lastPosition = position
             current.lastNano = now
+            TimingDiag.record(trackHash, position, 0L, 0L, playingCode, false, TimingDiag.REASON_BASELINE, current.listenedMs, speed)
             return null
         }
 
@@ -176,11 +195,13 @@ object SessionTracker {
             firstPlayingState = if (playing == null) 3 else if (playing == true) 1 else 2
         }
         if (elapsed > maxGapMs) maxGapMs = elapsed
+        if (elapsed > current.sessionMaxGapMs) current.sessionMaxGapMs = elapsed
 
         // 大幅回退（拖回开头 / 单曲循环 / 宿主重置位置）：已计过数就结算这一遍
         if (delta < -BACK_JUMP_TOLERANCE_MS) {
             current.lastPosition = position
             current.lastNano = now
+            TimingDiag.record(trackHash, position, delta, elapsed, playingCode, false, TimingDiag.REASON_BASELINE, current.listenedMs, speed)
             if (current.counted) {
                 persistFinished(current)
                 current.listenedMs = 0L
@@ -191,19 +212,38 @@ object SessionTracker {
 
         // 位置没推进（暂停 / 缓冲 / 重复回调）：**不动基准**。
         // 若在这里提交墙钟基准，宿主位置粒度比回调粗时会按比例少记（每秒只记最后一次回调的间隔）。
-        if (delta == 0L) return null
-
-        // 数据不可信：超长空档 / 位置跳变（拖进度条、跳转）/ 明确不在播放 → 重建基准，不计数
-        if (elapsed < 0L || elapsed > MAX_SANE_STEP_MS || playing == false) {
-            if (elapsed > MAX_SANE_STEP_MS) droppedSteps++
-            current.lastPosition = position
-            current.lastNano = now
+        if (delta == 0L) {
+            TimingDiag.record(trackHash, position, delta, elapsed, playingCode, false, TimingDiag.REASON_POSITION_UNCHANGED, current.listenedMs, speed)
             return null
         }
-        if (!withinStepTolerance(delta, elapsed)) {
-            droppedSteps++
+
+        // 数据不可信：超长空档 / 位置跳变（拖进度条、跳转）/ 明确不在播放 → 重建基准，不计数
+        if (elapsed < 0L) {
             current.lastPosition = position
             current.lastNano = now
+            TimingDiag.record(trackHash, position, delta, elapsed, playingCode, false, TimingDiag.REASON_INVALID_ELAPSED, current.listenedMs, speed)
+            return null
+        }
+        if (elapsed > MAX_SANE_STEP_MS) {
+            droppedSteps++
+            current.sessionDroppedSteps++
+            current.lastPosition = position
+            current.lastNano = now
+            TimingDiag.record(trackHash, position, delta, elapsed, playingCode, false, TimingDiag.REASON_MAX_GAP, current.listenedMs, speed)
+            return null
+        }
+        if (playing == false) {
+            current.lastPosition = position
+            current.lastNano = now
+            TimingDiag.record(trackHash, position, delta, elapsed, playingCode, false, TimingDiag.REASON_NOT_PLAYING, current.listenedMs, speed)
+            return null
+        }
+        if (!withinStepTolerance(delta, elapsed, speed)) {
+            droppedSteps++
+            current.sessionDroppedSteps++
+            current.lastPosition = position
+            current.lastNano = now
+            TimingDiag.record(trackHash, position, delta, elapsed, playingCode, false, TimingDiag.REASON_POSITION_JUMP, current.listenedMs, speed)
             return null
         }
 
@@ -211,18 +251,26 @@ object SessionTracker {
         if (playing == null) playing = true
 
         // 正常播放但回调间隔较长（后台/主线程卡顿）：位置与墙钟同步前进，照常计入。
-        // 位置明显没跟上墙钟（缓冲/解码停摆）：只计位置推进量，避免把停顿算成收听。
+        // 位置明显没跟上墙钟（缓冲/解码停摆）：只按位置推进量/倍速折算成实际收听时间，
+        // 避免把停顿算成收听，也避免 2 倍速时把 1 秒真实时间记成 2 秒。
         var counted = elapsed
-        if (elapsed > STALL_MIN_MS && delta * 2L < elapsed) {
-            counted = delta
+        var reason = TimingDiag.REASON_OK
+        if (elapsed > STALL_MIN_MS && delta.toDouble() * 2.0 < elapsed.toDouble() * speed) {
+            counted = (delta.toDouble() / speed.toDouble()).toLong()
+            if (counted < 1L) counted = 1L
+            current.sessionClampedSteps++
+            current.sessionClampedMs += (elapsed - counted)
             clampedSteps++
+            reason = TimingDiag.REASON_STALL_CLAMPED
         }
+        current.acceptedSteps++
         current.listenedMs += counted
         appendSpan(current, wallClock(), counted)
         if (!current.counted) {
             val threshold = StatsThresholds.countThreshold(current.durationMs)
             if (current.listenedMs >= threshold) current.counted = true
         }
+        TimingDiag.record(trackHash, position, delta, elapsed, playingCode, true, reason, current.listenedMs, speed)
 
         current.lastPosition = position
         current.lastNano = now
@@ -274,11 +322,12 @@ object SessionTracker {
      *
      * 允许 1–4 倍速（位置比时间快）；超过说明是拖进度条或跳转，不能算作正常播放。
      */
-    private fun withinStepTolerance(delta: Long, elapsed: Long): Boolean {
+    private fun withinStepTolerance(delta: Long, elapsed: Long, speed: Float): Boolean {
         if (delta < 1L) return false
-        val tolerance = elapsed * STEP_TOLERANCE_FACTOR + 250L
-        val maxDelta = if (tolerance > STEP_TOLERANCE_FLOOR_MS) tolerance else STEP_TOLERANCE_FLOOR_MS
-        return delta <= maxDelta
+        val factor = if (speed > 0.1f) speed.toDouble() else STEP_TOLERANCE_FACTOR.toDouble()
+        val tolerance = elapsed.toDouble() * factor * 1.25 + 500.0
+        val maxDelta = if (tolerance > STEP_TOLERANCE_FLOOR_MS.toDouble()) tolerance else STEP_TOLERANCE_FLOOR_MS.toDouble()
+        return delta.toDouble() <= maxDelta
     }
 
     @Synchronized
@@ -447,8 +496,37 @@ object SessionTracker {
         LiveSessionStore.clear()
     }
 
+    /**
+     * L1 计时摘要：只在出现异常（钳制/丢步/时钟跳变/超长空档）时写一行到 listen-stats.log
+     *
+     * 正常的一遍不写，避免日志噪音；用户反馈"时长不准"时这行能直接看出原因。
+     */
+    private fun maybeLogTiming(current: Session) {
+        val anomaly = current.sessionClampedSteps > 0L || current.sessionDroppedSteps > 0L ||
+            current.approx || current.sessionMaxGapMs > MAX_SANE_STEP_MS / 2L
+        if (!anomaly) return
+        try {
+            val dir = StatsStore.dataDirOrNull() ?: return
+            val line = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ROOT).format(Date()) +
+                "  [timing] eid=" + current.eid +
+                " dur=" + current.durationMs +
+                " listened=" + current.listenedMs +
+                " steps=" + current.acceptedSteps +
+                " clampedN=" + current.sessionClampedSteps +
+                " clampedMs=" + current.sessionClampedMs +
+                " drops=" + current.sessionDroppedSteps +
+                " maxGapMs=" + current.sessionMaxGapMs +
+                " approx=" + current.approx +
+                " speed=" + PlaybackSpeed.current(System.nanoTime() / 1_000_000L) + "\n"
+            LogFiles.append(File(dir, "listen-stats.log"), line)
+        } catch (t: Throwable) {
+            // 诊断日志失败不影响统计
+        }
+    }
+
     private fun settle(current: Session): PlayEvent? {
         if (current.listenedMs <= 0L) return null
+        maybeLogTiming(current)
         // 极短播放整条丢弃：连点「下一首」不该堆出一串 1~2 秒的噪音记录
         if (current.listenedMs < StatsThresholds.IGNORE_MIN_MS) return null
         val dur = current.durationMs

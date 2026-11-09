@@ -4,6 +4,8 @@ import com.spwmods.waerwak.listenstats.stats.CountRule
 import com.spwmods.waerwak.listenstats.stats.LiveSessionStore
 import com.spwmods.waerwak.listenstats.stats.MissingStore
 import com.spwmods.waerwak.listenstats.stats.PlaybackPipeline
+import com.spwmods.waerwak.listenstats.stats.PlaybackSpeed
+import com.spwmods.waerwak.listenstats.stats.TimingDiag
 import com.spwmods.waerwak.listenstats.stats.PlayEvent
 import com.spwmods.waerwak.listenstats.stats.SessionTracker
 import com.spwmods.waerwak.listenstats.stats.StatsStore
@@ -81,6 +83,9 @@ private fun freshEnv(
     StatsStore.resetForTesting(dir)
     PlaybackPipeline.resetForTesting()
     TrackResolver.resetForTesting()
+    PlaybackSpeed.resetForTesting()
+    TimingDiag.setEnabled(false)
+    TimingDiag.clear()
     SessionTracker.resetForTesting()
     resetClock()
     SessionTracker.nanoClock = { fakeNano }
@@ -1113,6 +1118,77 @@ fun main() {
         check(agg != null, "应该有记录")
         check(agg!!.count == 1, "接续后仍应只算一次播放，实际 " + agg.count)
         checkNear(agg.listenedMs, 80 * SECOND, 3 * SECOND, "两段应合并计时")
+    }
+
+    test("真实倍速参与容差：6 倍速也能正常计入") {
+        freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 0)
+        PlaybackSpeed.overrideProvider = { 6.0f }
+        val item = track("speed6", durationMs = 5 * MINUTE)
+        SessionTracker.onTrack(item)
+        SessionTracker.onPlayingChanged(true)
+        var i = 0
+        while (i < 30) {
+            advance(SECOND)
+            SessionTracker.onPosition((i + 1) * 6 * SECOND)
+            i++
+        }
+        SessionTracker.flush()
+        val agg = findTrack("speed6")
+        check(agg != null, "应该有记录")
+        checkNear(agg!!.listenedMs, 30 * SECOND, 3 * SECOND, "6 倍速应按实际时间记录")
+        PlaybackSpeed.resetForTesting()
+    }
+
+    test("读不到倍速时回退 4 倍容差（不误判 2 倍速）") {
+        freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 0)
+        val item = track("speed2", durationMs = 5 * MINUTE)
+        SessionTracker.onTrack(item)
+        SessionTracker.onPlayingChanged(true)
+        playFor(item, 0L, 30 * SECOND)
+        SessionTracker.flush()
+        val agg = findTrack("speed2")
+        check(agg != null, "应该有记录")
+        checkNear(agg!!.listenedMs, 30 * SECOND, 3 * SECOND, "1 倍回落应正常")
+    }
+
+    test("L1 计时摘要：出现钳制时写一行日志") {
+        val dir = freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 0)
+        val item = track("l1", durationMs = 10 * MINUTE)
+        SessionTracker.onTrack(item)
+        SessionTracker.onPlayingChanged(true)
+        playFor(item, 0L, 10 * SECOND)
+        // 位置冻结 10 秒（无状态回调）→ 触发钳制
+        advance(10 * SECOND)
+        SessionTracker.onPosition(10 * SECOND)
+        playFor(item, 10 * SECOND, 10 * SECOND)
+        SessionTracker.flush()
+        Thread.sleep(200L)
+        val log = File(dir, "listen-stats.log")
+        check(log.isFile, "应生成 listen-stats.log")
+        val text = log.readText(Charsets.UTF_8)
+        check(text.contains("[timing]"), "应包含 [timing] 摘要，实际：" + text.takeLast(200))
+        check(text.contains("clampedN="), "摘要应含钳制计数")
+    }
+
+    test("L2 逐帧诊断：开关、缓冲与导出") {
+        val dir = freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 0)
+        TimingDiag.clear()
+        TimingDiag.setEnabled(true)
+        val item = track("l2", durationMs = 5 * MINUTE)
+        SessionTracker.onTrack(item)
+        SessionTracker.onPlayingChanged(true)
+        playFor(item, 0L, 5 * SECOND)
+        SessionTracker.flush()
+        check(TimingDiag.frameCount() > 0L, "开启后应记录逐帧数据")
+        val written = TimingDiag.dump(dir)
+        check(written > 0, "导出应成功，实际 " + written)
+        val file = File(dir, "timing-diag.txt")
+        check(file.isFile, "应生成 timing-diag.txt")
+        val text = file.readText(Charsets.UTF_8)
+        check(text.contains("reason:"), "应有表头")
+        check(text.lines().size > 3, "应包含帧数据")
+        TimingDiag.setEnabled(false)
+        TimingDiag.clear()
     }
 
     test("时长单位的 h:mm:ss 格式") {

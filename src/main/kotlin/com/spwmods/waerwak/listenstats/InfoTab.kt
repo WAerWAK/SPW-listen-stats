@@ -316,6 +316,55 @@ internal fun InfoTab(
                     RowDivider()
                     ItemRow("计时诊断", timingDiagnosticsText())
                     RowDivider()
+                    val timingOn = remember { mutableStateOf(com.spwmods.waerwak.listenstats.stats.TimingDiag.enabled) }
+                    val exportHint = remember { mutableStateOf("") }
+                    AdjustableRow(
+                        label = "逐帧计时诊断",
+                        value = if (timingOn.value) "已开启" else "关闭",
+                        onClick = {
+                            val next = !timingOn.value
+                            timingOn.value = next
+                            com.spwmods.waerwak.listenstats.stats.TimingDiag.setEnabled(next)
+                            com.spwmods.waerwak.listenstats.ui.UiStateStore.saveTimingDiag(next)
+                            if (!next) exportHint.value = ""
+                        }
+                    )
+                    RowDivider()
+                    Row(
+                        Modifier.fillMaxWidth().height(34.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "计时日志",
+                            fontSize = SaltDesign.fontSizeMain,
+                            color = p.text,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            exportHint.value,
+                            fontSize = SaltDesign.fontSizeSub,
+                            color = p.subText
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        SmallButton("导出", true) {
+                            val t = Thread({
+                                val dir = com.spwmods.waerwak.listenstats.stats.StatsStore.dataDirOrNull()
+                                if (dir == null) {
+                                    exportHint.value = "没有数据目录"
+                                } else {
+                                    val n = com.spwmods.waerwak.listenstats.stats.TimingDiag.dump(dir)
+                                    exportHint.value = when {
+                                        n < 0 -> "导出失败"
+                                        n == 0 -> "暂无逐帧数据"
+                                        else -> "已导出 " + n + " 帧"
+                                    }
+                                }
+                            }, "listen-stats-diag")
+                            t.isDaemon = true
+                            t.start()
+                        }
+                    }
+                    RowDivider()
                     ItemRow("数据读取", com.spwmods.waerwak.listenstats.stats.StatsStore.loadError() ?: "正常")
                     RowDivider()
                     ItemRow("封面缓存", com.spwmods.waerwak.listenstats.ui.CoverCache.statsText())
@@ -636,8 +685,10 @@ private fun timingDiagnosticsText(): String {
         else -> "?"
     }
     return "丢步 " + com.spwmods.waerwak.listenstats.stats.SessionTracker.droppedSteps +
+        " · 钳制 " + com.spwmods.waerwak.listenstats.stats.SessionTracker.clampedSteps +
         " · 空档 " + (com.spwmods.waerwak.listenstats.stats.SessionTracker.maxGapMs / 1000L) + "s" +
-        " · 初始 " + state
+        " · 初始 " + state +
+        " · 倍速 " + com.spwmods.waerwak.listenstats.stats.PlaybackSpeed.current(System.nanoTime() / 1_000_000L)
 }
 
 /** 拼一段可直接贴给开发者排查的诊断文本 */

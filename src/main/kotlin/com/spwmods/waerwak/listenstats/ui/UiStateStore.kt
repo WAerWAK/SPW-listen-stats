@@ -39,6 +39,10 @@ object UiStateStore {
     @Volatile
     private var durationHmsRanking: Boolean = false
 
+    /** 逐帧计时诊断（默认关） */
+    @Volatile
+    private var timingDiag: Boolean = false
+
     @Volatile
     private var loaded = false
 
@@ -102,6 +106,16 @@ object UiStateStore {
         writeAll()
     }
 
+    fun loadTimingDiag(): Boolean {
+        ensureLoaded()
+        return timingDiag
+    }
+
+    fun saveTimingDiag(on: Boolean) {
+        timingDiag = on
+        writeAll()
+    }
+
     private fun ensureLoaded() {
         if (loaded) return
         loaded = true
@@ -126,6 +140,8 @@ object UiStateStore {
                     if (ms != null) showMissing = ms.groupValues[1] == "true"
                     val mr = Regex("\"durationHmsRanking\"\\s*:\\s*(true|false)").find(text)
                     if (mr != null) durationHmsRanking = mr.groupValues[1] == "true"
+                    val md = Regex("\"timingDiag\"\\s*:\\s*(true|false)").find(text)
+                    if (md != null) timingDiag = md.groupValues[1] == "true"
                     val mf = Regex("\"fontExtraPercent\"\\s*:\\s*([0-9]+)").find(text)
                     if (mf != null) {
                         val v = mf.groupValues[1].toIntOrNull()
@@ -154,6 +170,7 @@ object UiStateStore {
                     ",\"entryEnabled\":" + entryEnabled +
                     ",\"showMissing\":" + showMissing +
                     ",\"durationHmsRanking\":" + durationHmsRanking +
+                    ",\"timingDiag\":" + timingDiag +
                     ",\"fontExtraPercent\":" + fontExtraPercent + "}"
             )
         } catch (t: Throwable) {

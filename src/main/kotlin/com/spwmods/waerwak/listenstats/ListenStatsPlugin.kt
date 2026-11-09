@@ -27,6 +27,15 @@ class ListenStatsPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext)
         com.spwmods.waerwak.listenstats.stats.StatsStore.pluginVersionHint = pluginContext.pluginVersion
         HostProbe.logStartup()
 
+        // 逐帧计时诊断开关（默认关，信息页可开；只在内存里记环形缓冲）
+        try {
+            com.spwmods.waerwak.listenstats.stats.TimingDiag.setEnabled(
+                com.spwmods.waerwak.listenstats.ui.UiStateStore.loadTimingDiag()
+            )
+        } catch (t: Throwable) {
+            // 读取失败保持默认关闭
+        }
+
         // 播放事件处理线程：曲目解析、计时、快照写盘都在这里，宿主回调只入队
         com.spwmods.waerwak.listenstats.stats.PlaybackPipeline.start()
 
