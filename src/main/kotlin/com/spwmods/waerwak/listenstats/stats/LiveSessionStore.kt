@@ -41,7 +41,9 @@ object LiveSessionStore {
         /** 实际听音区间（扁平 [start,dur,…]） */
         val spans: LongArray = LongArray(0),
         /** 区间是否含推算成分 */
-        val approx: Boolean = false
+        val approx: Boolean = false,
+        /** true = 插件正常停用时保存的"待继续会话"（下次启动同曲目则接着记） */
+        val suspended: Boolean = false
     )
 
     @Volatile
@@ -83,6 +85,40 @@ object LiveSessionStore {
         }
     }
 
+    /** 插件停用时调用：把当前会话原样保存为"可继续"快照（不结算、不算一次播放） */
+    fun saveSuspended(snapshot: Snapshot) {
+        if (snapshot.listenedMs <= 0L) return
+        val dir = StatsStore.dataDirOrNull() ?: return
+        try {
+            if (!dir.isDirectory) dir.mkdirs()
+            val target = File(dir, FILE_NAME)
+            val tmp = File(dir, FILE_NAME + ".tmp")
+            tmp.writeText(lineOf(snapshot, System.currentTimeMillis()), Charsets.UTF_8)
+            try {
+                Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            } catch (t: Throwable) {
+                target.writeText(lineOf(snapshot, System.currentTimeMillis()), Charsets.UTF_8)
+            }
+            lastError = null
+        } catch (t: Throwable) {
+            lastError = t.javaClass.simpleName + ": " + t.message
+        }
+    }
+
+    /** 读取当前快照（不结算、不清除）；没有或已过期返回 null */
+    fun load(): Snapshot? {
+        val dir = StatsStore.dataDirOrNull() ?: return null
+        val file = File(dir, FILE_NAME)
+        if (!file.isFile) return null
+        val text = try {
+            file.readText(Charsets.UTF_8)
+        } catch (t: Throwable) {
+            lastError = t.javaClass.simpleName + ": " + t.message
+            return null
+        }
+        return parse(text)
+    }
+
     /** 正常结算后调用：清空标记（文件内容置为 ms=0，不删除文件） */
     fun clear() {
         lastSaveAt = 0L
@@ -95,39 +131,12 @@ object LiveSessionStore {
         }
     }
 
-    /**
-     * 启动时调用：把上次未结算的会话补记进统计
-     *
-     * @return 是否成功补记
-     */
-    @Synchronized
-    fun recover(): Boolean {
-        val dir = StatsStore.dataDirOrNull() ?: return false
-        val file = File(dir, FILE_NAME)
-        if (!file.isFile) return false
-        val text = try {
-            file.readText(Charsets.UTF_8)
-        } catch (t: Throwable) {
-            lastError = t.javaClass.simpleName + ": " + t.message
-            return false
-        }
+    /** 解析快照文本；没有有效会话返回 null */
+    private fun parse(text: String): Snapshot? {
         val ms = JsonLite.long(text, "ms")
-        if (ms <= 0L) return false
+        if (ms <= 0L) return null
         val savedAt = JsonLite.long(text, "savedAt")
-        val now = System.currentTimeMillis()
-        if (savedAt > 0L && now - savedAt > MAX_AGE_MS) {
-            clear()
-            return false
-        }
-        // 低于忽略阈值：整条丢弃（顺手清掉残留，避免每次启动都重算）
-        if (ms < StatsThresholds.IGNORE_MIN_MS) {
-            clear()
-            return false
-        }
-        val dur = JsonLite.long(text, "dur")
-        val counted = JsonLite.bool(text, "c")
-        val skipped = !counted
-        val start = JsonLite.long(text, "t")
+        if (savedAt > 0L && System.currentTimeMillis() - savedAt > MAX_AGE_MS) return null
         var spans = PlayEvent.parseSpans(JsonLite.string(text, "s"))
         var approx = JsonLite.bool(text, "ap")
         var total = ms
@@ -142,29 +151,62 @@ object LiveSessionStore {
             if (total != ms) approx = true
         } else {
             // 旧格式（v1）只有总毫秒：用"结束时间倒推一整段"近似
-            val endAt = if (start > 0L) start + ms else now
+            val start = JsonLite.long(text, "t")
+            val endAt = if (start > 0L) start + ms else System.currentTimeMillis()
             spans = longArrayOf(endAt - ms, ms)
             approx = true
         }
-        val event = PlayEvent(
-            t = if (start > 0L) start + ms else now,
+        return Snapshot(
+            startTimeMs = JsonLite.long(text, "t"),
             id = JsonLite.string(text, "id"),
             path = JsonLite.string(text, "path"),
             title = JsonLite.string(text, "ti"),
             artist = JsonLite.string(text, "ar"),
             album = JsonLite.string(text, "al"),
             albumArtist = JsonLite.string(text, "aa"),
-            ms = total,
-            dur = dur,
-            counted = counted,
-            skipped = skipped,
+            listenedMs = total,
+            durationMs = JsonLite.long(text, "dur"),
+            counted = JsonLite.bool(text, "c"),
             eid = JsonLite.string(text, "eid"),
             spans = spans,
-            approx = approx
+            approx = approx,
+            suspended = JsonLite.bool(text, "suspend")
+        )
+    }
+
+    /**
+     * 启动时调用：把上次未结算的会话补记进统计
+     *
+     * @return 是否成功补记
+     */
+    @Synchronized
+    fun recover(): Boolean {
+        val snap = load() ?: return false
+        // 低于忽略阈值：整条丢弃（顺手清掉残留，避免每次启动都重算）
+        if (snap.listenedMs < StatsThresholds.IGNORE_MIN_MS) {
+            clear()
+            return false
+        }
+        val start = snap.startTimeMs
+        val event = PlayEvent(
+            t = if (start > 0L) start + snap.listenedMs else System.currentTimeMillis(),
+            id = snap.id,
+            path = snap.path,
+            title = snap.title,
+            artist = snap.artist,
+            album = snap.album,
+            albumArtist = snap.albumArtist,
+            ms = snap.listenedMs,
+            dur = snap.durationMs,
+            counted = snap.counted,
+            skipped = !snap.counted,
+            eid = snap.eid,
+            spans = snap.spans,
+            approx = snap.approx
         )
         return try {
             StatsStore.record(event)
-            lastRecoveredMs = ms
+            lastRecoveredMs = snap.listenedMs
             clear()
             true
         } catch (t: Throwable) {
@@ -215,6 +257,7 @@ object LiveSessionStore {
             sb.append(",\"s\":\"").append(text).append('"')
         }
         if (s.approx) sb.append(",\"ap\":true")
+        if (s.suspended) sb.append(",\"suspend\":true")
         sb.append('}')
         return sb.toString()
     }

@@ -122,7 +122,7 @@ object PlaybackPipeline {
     @Synchronized
     fun stop() {
         if (!running) {
-            SessionTracker.flush()
+            SessionTracker.suspendCurrent()
             return
         }
         running = false
@@ -163,8 +163,8 @@ object PlaybackPipeline {
 
     private fun processLoop() {
         try {
-            // 启动即解析一次当前曲目：播放中途启用/热重载插件也能接管当前这一遍
-            syncTrack(System.nanoTime())
+            // 启动即解析当前曲目：播放中途启用/热重载插件也能接管当前这一遍
+            bootstrapSession()
             while (running) {
                 val event = queue.poll(IDLE_POLL_MS, TimeUnit.MILLISECONDS)
                 if (event != null) process(event)
@@ -174,11 +174,47 @@ object PlaybackPipeline {
             lastError = t.javaClass.simpleName + ": " + t.message
         } finally {
             try {
-                SessionTracker.flush()
+                // 插件停用：挂起当前会话（下次启动同曲目接着记，不算两次播放）
+                SessionTracker.suspendCurrent()
             } catch (t: Throwable) {
                 lastError = t.javaClass.simpleName + ": " + t.message
             }
         }
+    }
+
+    /**
+     * 启动引导：
+     * 1) 先读挂起快照，若是同一首曲目 → 接续上次会话（避免重载插件算两次播放）；
+     * 2) 否则按旧逻辑补记上次未结算会话（崩溃/强杀保护）；
+     * 3) 最后以权威曲目 seed 当前会话（曲中启用也能立刻开始记录）。
+     */
+    private fun bootstrapSession() {
+        val nano = System.nanoTime()
+        val item = TrackResolver.resolve(nano / 1_000_000L, true)
+        val itemId = if (item == null) "" else item.id
+        val snap = LiveSessionStore.load()
+        if (snap != null && snap.suspended && itemId.isNotEmpty() && snap.id == itemId) {
+            if (SessionTracker.resumeFrom(snap)) {
+                lastTrackId = itemId
+                lastTrackCheckNano = nano
+                return
+            }
+        }
+        try {
+            if (LiveSessionStore.recover()) {
+                System.err.println(
+                    "[listen-stats] 已恢复上次未结算的会话：" +
+                        (LiveSessionStore.lastRecoveredMs / 1000L) + " 秒"
+                )
+            }
+        } catch (t: Throwable) {
+            lastError = t.javaClass.simpleName + ": " + t.message
+        }
+        if (item != null && item.id.isNotBlank()) {
+            SessionTracker.onTrack(item)
+            lastTrackId = item.id
+        }
+        lastTrackCheckNano = nano
     }
 
     private fun drainRemaining() {

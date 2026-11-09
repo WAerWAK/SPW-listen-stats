@@ -27,16 +27,6 @@ class ListenStatsPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext)
         com.spwmods.waerwak.listenstats.stats.StatsStore.pluginVersionHint = pluginContext.pluginVersion
         HostProbe.logStartup()
 
-        // 把上次未结算的播放会话补记回统计（崩溃/强杀保护）
-        try {
-            if (com.spwmods.waerwak.listenstats.stats.LiveSessionStore.recover()) {
-                val ms = com.spwmods.waerwak.listenstats.stats.LiveSessionStore.lastRecoveredMs
-                System.err.println("[listen-stats] 已恢复上次未结算的会话：" + (ms / 1000L) + " 秒")
-            }
-        } catch (t: Throwable) {
-            System.err.println("[listen-stats] 恢复会话失败: " + t.message)
-        }
-
         // 播放事件处理线程：曲目解析、计时、快照写盘都在这里，宿主回调只入队
         com.spwmods.waerwak.listenstats.stats.PlaybackPipeline.start()
 

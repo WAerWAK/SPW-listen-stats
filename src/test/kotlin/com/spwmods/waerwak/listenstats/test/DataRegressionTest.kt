@@ -689,9 +689,9 @@ fun main() {
         checkNear(agg!!.listenedMs, 30 * SECOND, 3 * SECOND, "倍速按墙钟记（30 秒真实时间）")
     }
 
-    test("采样停摆超过上限时丢弃该段") {
+    test("回调停摆但位置同步前进应计入（后台/卡顿）") {
         freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 0)
-        val item = track("stall", durationMs = 10 * MINUTE)
+        val item = track("long-gap", durationMs = 10 * MINUTE)
         SessionTracker.onTrack(item)
         SessionTracker.onPlayingChanged(true)
         playFor(item, 0L, 10 * SECOND)
@@ -700,9 +700,25 @@ fun main() {
         SessionTracker.onPosition(30 * SECOND)
         playFor(item, 30 * SECOND, 10 * SECOND)
         SessionTracker.flush()
-        val agg = findTrack("stall")
+        val agg = findTrack("long-gap")
         check(agg != null, "应该有记录")
-        checkNear(agg!!.listenedMs, 20 * SECOND, 3 * SECOND, "停摆的 20 秒不应计入")
+        checkNear(agg!!.listenedMs, 40 * SECOND, 3 * SECOND, "正常播放的长间隔应计入")
+    }
+
+    test("位置冻结的停摆只计位置推进量") {
+        freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 0)
+        val item = track("frozen", durationMs = 10 * MINUTE)
+        SessionTracker.onTrack(item)
+        SessionTracker.onPlayingChanged(true)
+        playFor(item, 0L, 10 * SECOND)
+        // 位置冻结 20 秒（缓冲/解码停摆），期间时钟继续走、没有状态回调
+        advance(20 * SECOND)
+        SessionTracker.onPosition(10 * SECOND)
+        playFor(item, 10 * SECOND, 10 * SECOND)
+        SessionTracker.flush()
+        val agg = findTrack("frozen")
+        check(agg != null, "应该有记录")
+        checkNear(agg!!.listenedMs, 20 * SECOND, 3 * SECOND, "冻结的 20 秒不应计入")
     }
 
     test("暂停缺口不进入听音区间") {
@@ -976,6 +992,7 @@ fun main() {
             check(PlaybackPipeline.awaitIdleForTesting(2_000L), "队列应在超时内处理完")
             i++
         }
+        SessionTracker.flush()
         PlaybackPipeline.stop()
         Thread.sleep(200L)
         val agg = findTrack("no-lyric")
@@ -999,6 +1016,7 @@ fun main() {
             check(PlaybackPipeline.awaitIdleForTesting(2_000L), "队列应在超时内处理完")
             i++
         }
+        SessionTracker.flush()
         PlaybackPipeline.stop()
         Thread.sleep(200L)
         val agg = findTrack("authority")
@@ -1023,6 +1041,7 @@ fun main() {
             check(PlaybackPipeline.awaitIdleForTesting(2_000L), "队列应在超时内处理完")
             i++
         }
+        SessionTracker.flush()
         PlaybackPipeline.stop()
         Thread.sleep(200L)
         val agg = findTrack("seed")
@@ -1030,6 +1049,70 @@ fun main() {
         checkNear(agg!!.listenedMs, 30 * SECOND, 3 * SECOND, "应记录约 30 秒")
         PlaybackPipeline.resetForTesting()
         TrackResolver.resetForTesting()
+    }
+
+    test("超长区间串也能解析（回归：正则栈溢出）") {
+        val sb = StringBuilder()
+        var i = 0
+        while (i < 400) {
+            if (i > 0) sb.append(',')
+            sb.append(1794211512273L + i * 1000L).append(':').append(1000)
+            i++
+        }
+        val line = "{\"t\":1794211919167,\"id\":\"x\",\"path\":\"D:\\\\Music\\\\a.flac\",\"title\":\"标题\"," +
+            "\"artist\":\"a\",\"album\":\"b\",\"ms\":400000,\"dur\":400000,\"counted\":true,\"skipped\":false," +
+            "\"eid\":\"e-1\",\"s\":\"" + sb.toString() + "\",\"ap\":true}"
+        val ev = PlayEvent.fromJsonLine(line)
+        check(ev != null, "长行应能解析")
+        check(ev!!.spans.size == 800, "应解析出 400 段，实际 " + (ev.spans.size / 2))
+        check(ev.eid == "e-1", "eid 应正确")
+        check(ev.approx, "ap 应为 true")
+        val round = PlayEvent.fromJsonLine(ev.toJsonLine())
+        check(round != null && round.spans.size == 800 && round.ms == 400000L, "回环应一致")
+    }
+
+    test("区间明细能读取含超长区间串的事件文件（回归）") {
+        val dir = freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 0)
+        val events = File(dir, "events")
+        events.mkdirs()
+        val base = localMillis(2026, 11, 9, 16, 0, 0)
+        val sb = StringBuilder()
+        var i = 0
+        while (i < 300) {
+            if (i > 0) sb.append(',')
+            sb.append(base + i * 1000L).append(':').append(1000)
+            i++
+        }
+        val line = "{\"t\":" + (base + 300_000L) + ",\"id\":\"long-1\",\"path\":\"D:\\\\Music\\\\long.flac\"," +
+            "\"title\":\"长曲\",\"artist\":\"歌手\",\"album\":\"专辑\",\"ms\":300000,\"dur\":300000," +
+            "\"counted\":true,\"skipped\":false,\"s\":\"" + sb.toString() + "\"}"
+        File(events, "2026-11-09.jsonl").writeText(line + "\n", Charsets.UTF_8)
+        StatsStore.resetForTesting(dir)
+        val rows = StatsStore.trackDetailsInRange(base, base + 600_000L)
+        check(rows.size == 1, "应返回 1 条明细，实际 " + rows.size)
+        check(rows[0].ms == 300_000L, "明细时长应为 300 秒，实际 " + rows[0].ms)
+        val hist = StatsStore.trackHistory("long-1", 10)
+        check(hist.size == 1, "播放记录应能读到，实际 " + hist.size)
+    }
+
+    test("重载插件再接续同一首：只算一次播放") {
+        freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 0)
+        val item = track("reload", durationMs = 5 * MINUTE)
+        SessionTracker.onTrack(item)
+        SessionTracker.onPlayingChanged(true)
+        playFor(item, 0L, 40 * SECOND)
+        // 插件停用：保存"可继续"快照，不结算
+        SessionTracker.suspendCurrent()
+        check(totalCount() == 0, "停用时不应结算出记录，实际 " + totalCount())
+        val snap = LiveSessionStore.load()
+        check(snap != null && snap.suspended, "应留下挂起快照")
+        check(SessionTracker.resumeFrom(snap!!), "同一首应能接续")
+        playFor(item, 40 * SECOND, 40 * SECOND)
+        SessionTracker.flush()
+        val agg = findTrack("reload")
+        check(agg != null, "应该有记录")
+        check(agg!!.count == 1, "接续后仍应只算一次播放，实际 " + agg.count)
+        checkNear(agg.listenedMs, 80 * SECOND, 3 * SECOND, "两段应合并计时")
     }
 
     test("时长单位的 h:mm:ss 格式") {

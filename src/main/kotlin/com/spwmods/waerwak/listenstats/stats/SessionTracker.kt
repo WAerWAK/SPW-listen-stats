@@ -15,7 +15,8 @@ import java.util.concurrent.Executors
  *
  * 有效时长记的是**单调时钟增量**，位置只用来确认"确实在推进"：
  *  - 位置没推进（暂停 / 缓冲 / 重复回调）、或推进幅度比经过的时间快太多（拖进度条、跳转）→ 整步丢弃；
- *  - 采样停摆超过 MAX_STEP_MS、或位置跳变超过 4 倍容差 → 整步丢弃；
+ *  - 位置与墙钟一致的长间隔（后台/卡顿）照常计入；位置没跟上墙钟（停摆/缓冲）只计位置推进量；
+ *  - 位置跳变超过 4 倍容差 / 超过 30 分钟硬上限 → 整步丢弃；
  *  - 基准（lastPosition / lastNano）在**判定之后**才提交，被丢弃的步进不会吃掉下一段的墙钟。
  *
  * 这样既不会被暂停/卡顿虚增，也不会因为宿主位置回调变密（位置粒度粗于回调）而按比例少记。
@@ -28,8 +29,11 @@ object SessionTracker {
     private const val BACK_JUMP_TOLERANCE_MS = 3_000L
     private const val RESTART_POSITION_MS = 3_000L
 
-    /** 单步可接受的最大墙钟跨度：超过说明采样停摆（切后台/休眠/线程被卡），整段丢弃 */
-    private const val MAX_STEP_MS = 15_000L
+    /** 单步的硬上限（防御异常值）：超过视为不可信，整段丢弃 */
+    private const val MAX_SANE_STEP_MS = 30L * 60L * 1000L
+
+    /** 判定"位置没跟上墙钟"的最小间隔：这类步进只计位置推进量，避免把停摆/缓冲计入 */
+    private const val STALL_MIN_MS = 2_500L
 
     /** 位置推进的容差倍数：允许 1–4 倍速播放，超过视为拖进度条/跳转 */
     private const val STEP_TOLERANCE_FACTOR = 4L
@@ -55,7 +59,7 @@ object SessionTracker {
         /** 本遍的近似开始时间（崩溃恢复时用来还原时间位置） */
         var startTimeMs: Long = 0L
         /** 本遍会话 id：合并导入时用来去重 */
-        val eid: String = java.util.UUID.randomUUID().toString()
+        var eid: String = java.util.UUID.randomUUID().toString()
         /** 实际听音区间，扁平存 [start, dur, start, dur, …]（绝对 epoch ms） */
         val spans = ArrayList<LongArray>()
         /** 区间是否含推算成分（墙钟被调整过 / 崩溃恢复补齐） */
@@ -189,9 +193,15 @@ object SessionTracker {
         // 若在这里提交墙钟基准，宿主位置粒度比回调粗时会按比例少记（每秒只记最后一次回调的间隔）。
         if (delta == 0L) return null
 
-        // 位置在动但数据不可信（停摆过久 / 幅度超过容差 = 拖进度条、跳转）：重建基准，不计数
-        if (elapsed < 0L || elapsed > MAX_STEP_MS || !withinStepTolerance(delta, elapsed) || playing == false) {
-            if (elapsed > MAX_STEP_MS || (playing != false && !withinStepTolerance(delta, elapsed))) droppedSteps++
+        // 数据不可信：超长空档 / 位置跳变（拖进度条、跳转）/ 明确不在播放 → 重建基准，不计数
+        if (elapsed < 0L || elapsed > MAX_SANE_STEP_MS || playing == false) {
+            if (elapsed > MAX_SANE_STEP_MS) droppedSteps++
+            current.lastPosition = position
+            current.lastNano = now
+            return null
+        }
+        if (!withinStepTolerance(delta, elapsed)) {
+            droppedSteps++
             current.lastPosition = position
             current.lastNano = now
             return null
@@ -200,9 +210,15 @@ object SessionTracker {
         // 位置确实在推进 → 建立播放态（宿主不会在注册时补发状态）
         if (playing == null) playing = true
 
-        // 记的是经过的时间，位置只作证据：宿主位置粒度比回调粗时也不会少记
-        current.listenedMs += elapsed
-        appendSpan(current, wallClock(), elapsed)
+        // 正常播放但回调间隔较长（后台/主线程卡顿）：位置与墙钟同步前进，照常计入。
+        // 位置明显没跟上墙钟（缓冲/解码停摆）：只计位置推进量，避免把停顿算成收听。
+        var counted = elapsed
+        if (elapsed > STALL_MIN_MS && delta * 2L < elapsed) {
+            counted = delta
+            clampedSteps++
+        }
+        current.listenedMs += counted
+        appendSpan(current, wallClock(), counted)
         if (!current.counted) {
             val threshold = StatsThresholds.countThreshold(current.durationMs)
             if (current.listenedMs >= threshold) current.counted = true
@@ -211,6 +227,11 @@ object SessionTracker {
         current.lastPosition = position
         current.lastNano = now
         // 调用方在锁外写盘（进程被强杀时最多丢 10 秒）
+        return snapshotOf(current)
+    }
+
+    /** 当前会话的崩溃保护快照 */
+    private fun snapshotOf(current: Session): LiveSessionStore.Snapshot {
         return LiveSessionStore.Snapshot(
             startTimeMs = current.startTimeMs,
             id = current.meta.id,
@@ -263,6 +284,7 @@ object SessionTracker {
     @Synchronized
     fun onSeek(position: Long) {
         val current = session ?: return
+        if (playing != false) countTail(current)
         if (current.counted && position <= RESTART_POSITION_MS) {
             persistFinished(current)
             current.listenedMs = 0L
@@ -275,11 +297,27 @@ object SessionTracker {
 
     @Synchronized
     fun onPlayingChanged(isPlaying: Boolean) {
+        val current = session
+        // 暂停/结束时，最后一次计数帧到"暂停这一刻"之间仍是真实播放：
+        // 通过状态回调补记（上限 1.5s，避免把状态回调延迟当成播放）
+        if (!isPlaying && current != null && playing != false) countTail(current)
         playing = isPlaying
-        val current = session ?: return
-        // 播放/暂停切换时重建基准：暂停期间的时间不能补进时长
-        current.lastPosition = -1L
-        current.lastNano = 0L
+        // 不重建基准：暂停期间没有位置回调，恢复后第一帧 delta=0，
+        // 下一次推进会因"位置明显落后墙钟"被停摆钳制为只计位置增量（暂停时间不计入）
+    }
+
+    /** 补记当前基准到"状态切换"之间的播放时间（仅供暂停/seek/停止使用） */
+    private fun countTail(current: Session) {
+        if (current.lastNano <= 0L) return
+        val tail = (nanoClock() - current.lastNano) / 1_000_000L
+        if (tail < 1L || tail > 1_500L) return
+        current.listenedMs += tail
+        appendSpan(current, wallClock(), tail)
+        if (!current.counted) {
+            val threshold = StatsThresholds.countThreshold(current.durationMs)
+            if (current.listenedMs >= threshold) current.counted = true
+        }
+        current.lastNano = nanoClock()
     }
 
     fun onState(state: PlaybackExtensionPoint.State) {
@@ -304,9 +342,14 @@ object SessionTracker {
 
     // ---------------------------------------------------------------- 诊断
 
-    /** 被丢弃的步进数（采样停摆 / 位置跳变） */
+    /** 被丢弃的步进数（超长空档 / 位置跳变） */
     @Volatile
     var droppedSteps: Long = 0L
+        private set
+
+    /** 被"只计位置推进量"钳制的步数（位置没跟上墙钟，多为缓冲/停摆） */
+    @Volatile
+    var clampedSteps: Long = 0L
         private set
 
     /** 观察到的最大回调空档（毫秒） */
@@ -322,6 +365,7 @@ object SessionTracker {
     @Synchronized
     internal fun resetDiagnostics() {
         droppedSteps = 0L
+        clampedSteps = 0L
         maxGapMs = 0L
         firstPlayingState = 0
     }
@@ -332,6 +376,65 @@ object SessionTracker {
         val current = session ?: return
         session = null
         persistFinished(current)
+    }
+
+    /**
+     * 插件停用：把当前会话保存为"可继续"快照，不结算、不算一次播放
+     *
+     * 重新启用且还是同一首时由 [resumeFrom] 接着记，避免重载插件被识别成两次播放。
+     */
+    @Synchronized
+    fun suspendCurrent() {
+        val current = session ?: return
+        session = null
+        if (current.listenedMs <= 0L) return
+        val snap = snapshotOf(current)
+        val suspended = LiveSessionStore.Snapshot(
+            startTimeMs = snap.startTimeMs,
+            id = snap.id,
+            path = snap.path,
+            title = snap.title,
+            artist = snap.artist,
+            album = snap.album,
+            albumArtist = snap.albumArtist,
+            listenedMs = snap.listenedMs,
+            durationMs = snap.durationMs,
+            counted = snap.counted,
+            eid = snap.eid,
+            spans = snap.spans,
+            approx = snap.approx,
+            suspended = true
+        )
+        LiveSessionStore.saveSuspended(suspended)
+    }
+
+    /** 接续被 [suspendCurrent] 挂起的会话（同一首曲目） */
+    @Synchronized
+    fun resumeFrom(snapshot: LiveSessionStore.Snapshot): Boolean {
+        if (session != null) return false
+        val meta = Meta(
+            snapshot.id, snapshot.path, snapshot.title,
+            snapshot.artist, snapshot.album, snapshot.albumArtist
+        )
+        val key = keyOf(meta)
+        if (key.isBlank()) return false
+        val fresh = Session(key, meta)
+        if (snapshot.eid.isNotBlank()) fresh.eid = snapshot.eid
+        fresh.listenedMs = snapshot.listenedMs
+        fresh.counted = snapshot.counted
+        fresh.durationMs = snapshot.durationMs
+        fresh.startTimeMs = snapshot.startTimeMs
+        fresh.approx = snapshot.approx
+        var i = 0
+        while (i + 1 < snapshot.spans.size) {
+            fresh.spans.add(longArrayOf(snapshot.spans[i], snapshot.spans[i + 1]))
+            i += 2
+        }
+        fresh.lastNano = nanoClock()
+        fresh.lastPosition = -1L
+        session = fresh
+        LiveSessionStore.clear()
+        return true
     }
 
     // ---------------------------------------------------------------- 内部
@@ -355,6 +458,20 @@ object SessionTracker {
         val endAt = wallClock()
         var spans = flattenSpans(current)
         var approx = current.approx
+        // 时钟跳变等情况下区间可能被裁剪，与 listenedMs 不再一致：
+        // 统计以监听时长为权威，区间退化为"结束时间倒推一整段"，避免日聚合比总时长少
+        if (spans.size >= 2) {
+            var spanSum = 0L
+            var si = 0
+            while (si + 1 < spans.size) {
+                spanSum += spans[si + 1]
+                si += 2
+            }
+            if (spanSum != current.listenedMs) {
+                spans = longArrayOf(endAt - current.listenedMs, current.listenedMs)
+                approx = true
+            }
+        }
         if (spans.size < 2) {
             // 没有任何区间（理论上进不来）：退化成"以结束时间倒推一整段"
             spans = longArrayOf(endAt - current.listenedMs, current.listenedMs)
@@ -466,6 +583,13 @@ object SessionTracker {
         var raw = item.id
         if (raw.isBlank()) raw = item.path
         if (raw.isBlank()) raw = item.title + "|" + item.artist + "|" + item.album
+        return raw.trim().lowercase()
+    }
+
+    private fun keyOf(meta: Meta): String {
+        var raw = meta.id
+        if (raw.isBlank()) raw = meta.path
+        if (raw.isBlank()) raw = meta.title + "|" + meta.artist + "|" + meta.album
         return raw.trim().lowercase()
     }
 

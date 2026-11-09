@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.spwmods.waerwak.listenstats"
-version = "1.5.0.1"
+version = "1.5.0.2"
 
 val pluginId = "com.spwmods.waerwak.listenstats"
 val pluginVersion = version.toString()

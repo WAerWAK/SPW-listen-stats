@@ -66,9 +66,38 @@ internal object JsonLite {
         return sb.toString()
     }
 
+    /**
+     * 取字符串字段
+     *
+     * 不能再用正则做无界捕获：事件行的 `s`（听音区间串）在长曲目里可达数 KB，
+     * 正则里的 (?:[^"\\]|\\.)* 在深调用栈下会 StackOverflowError，
+     * 导致整条明细解析失败、区间明细/播放记录变空（1.5.0 出现过的真实问题）。
+     * 这里改成手写扫描，O(n) 且不依赖栈深度。
+     */
     fun string(line: String, key: String, def: String = ""): String {
-        val m = Regex("\"$key\":\"((?:[^\"\\\\]|\\\\.)*)\"").find(line) ?: return def
-        return unescape(m.groupValues[1])
+        val needle = "\"" + key + "\":\""
+        var start = line.indexOf(needle)
+        if (start < 0) return def
+        start += needle.length
+        val sb = StringBuilder(32)
+        var i = start
+        while (i < line.length) {
+            val c = line[i]
+            if (c == '\\') {
+                if (i + 1 < line.length) {
+                    sb.append(c).append(line[i + 1])
+                    i += 2
+                } else {
+                    i++
+                }
+            } else if (c == '"') {
+                return unescape(sb.toString())
+            } else {
+                sb.append(c)
+                i++
+            }
+        }
+        return def
     }
 
     fun long(line: String, key: String, def: Long = 0L): Long {
