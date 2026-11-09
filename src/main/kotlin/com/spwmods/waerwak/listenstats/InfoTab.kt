@@ -55,11 +55,18 @@ internal fun InfoTab(
     val trackCount = StatsStore.snapshot(1, 0).trackCount
     val eventLines = StatsStore.replayedLineCount()
     val bridgeOn = com.spwmods.waerwak.listenstats.ui.HostMaterialState.bridgeAvailable
+    // 高级信息默认折叠（每次打开面板恢复折叠）
+    val advancedOpen = remember { mutableStateOf(false) }
+
+    // 缺失曲目检测结果（普通区只展示可操作项，详细结果放高级信息）
+    val missingTick = MissingState.version.value
+    val missingCount = remember(missingTick) { MissingStore.count() }
+    val missingAt = remember(missingTick) { MissingStore.checkedAt() }
+    val scanning = MissingState.scanning.value
 
     Column(Modifier.fillMaxWidth()) {
-        // 两列瀑布流，各列内部紧挨
-        // 左列：提示 → 插件 → 采集 → 宿主
-        // 右列：显示 → 数据 → 诊断
+        // 两列瀑布流，各列内部紧挨（只放普通用户会用到的内容）
+        // 左列：提示 → 插件 → 采集 → 宿主；右列：显示 → 数据
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Column(Modifier.weight(1f)) {
                 // ------------------------------------------------ 提示（置顶）
@@ -98,16 +105,12 @@ internal fun InfoTab(
                     }
                 }
                 Spacer(Modifier.height(12.dp))
-                // ------------------------------------------------ 插件
+                // ------------------------------------------------ 插件（普通用户关心的信息）
                 SaltGroup {
                     GroupHeader("插件")
                     ItemRow("名称", "听歌统计")
                     RowDivider()
                     ItemRow("版本", snap.pluginVersion)
-                    RowDivider()
-                    ItemRow("插件 ID", snap.pluginId)
-                    RowDivider()
-                    ItemRow("渠道", snap.channel)
                     RowDivider()
                     ItemRow("作者", "spwmods")
                     RowDivider()
@@ -118,7 +121,7 @@ internal fun InfoTab(
                     LinkRow("Steam 创意工坊", "听歌统计 · 3822834646") { openUrl(WORKSHOP_URL) }
                 }
                 Spacer(Modifier.height(12.dp))
-                // ------------------------------------------------ 采集（采集规则 + 实时状态）
+                // ------------------------------------------------ 采集（规则 + 实时状态）
                 SaltGroup {
                     GroupHeader("采集")
                     AdjustableRow(
@@ -129,19 +132,13 @@ internal fun InfoTab(
                     RowDivider()
                     ItemRow("播放状态", if (snap.isPlaying) "播放中" else "未播放")
                     RowDivider()
-                    ItemRow("位置回调", snap.positionCallbacks.toString() + " 次")
-                    RowDivider()
                     ItemRow("当前曲目", snap.lastTrackText)
                 }
                 Spacer(Modifier.height(12.dp))
-                // ------------------------------------------------ 宿主
+                // ------------------------------------------------ 宿主（只留版本）
                 SaltGroup {
                     GroupHeader("宿主")
                     ItemRow("SPW 版本", snap.spwVersion)
-                    RowDivider()
-                    ItemRow("Kotlin", snap.kotlinVersion)
-                    RowDivider()
-                    ItemRow("Compose", snap.composeVersion)
                 }
             }
             Column(Modifier.weight(1f)) {
@@ -210,16 +207,12 @@ internal fun InfoTab(
                     )
                 }
                 Spacer(Modifier.height(12.dp))
-                // ------------------------------------------------ 数据（统计量 + 保留策略 + 位置）
+                // ------------------------------------------------ 数据（普通用户可操作项）
                 SaltGroup {
                     GroupHeader("数据")
                     ItemRow("曲目数", trackCount.toString() + " 首")
                     RowDivider()
                     // 缺失曲目：手动检测 + 结果持久化（missing.txt），不开面板不会跑
-                    val missingTick = MissingState.version.value
-                    val missingCount = remember(missingTick) { MissingStore.count() }
-                    val missingAt = remember(missingTick) { MissingStore.checkedAt() }
-                    val scanning = MissingState.scanning.value
                     Row(
                         Modifier.fillMaxWidth().height(34.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -255,25 +248,6 @@ internal fun InfoTab(
                         }
                     }
                     RowDivider()
-                    ItemRow("上次检测", formatDateTime(missingAt))
-                    RowDivider()
-                    ItemRow(
-                        "检测结果",
-                        if (MissingState.lastMessage.value.isNotBlank()) MissingState.lastMessage.value else "-"
-                    )
-                    RowDivider()
-                    ItemRow("事件行数", eventLines.toString())
-                    RowDivider()
-                    Column(Modifier.padding(vertical = 6.dp)) {
-                        Text("存储占用", fontSize = SaltDesign.fontSizeMain, color = p.text)
-                        Spacer(Modifier.height(3.dp))
-                        Text(
-                            StatsStore.storageSummary(),
-                            fontSize = SaltDesign.fontSizeSub,
-                            color = p.subText
-                        )
-                    }
-                    RowDivider()
                     AdjustableRow(
                         label = "明细保留",
                         value = StorageRule.describe(),
@@ -288,134 +262,6 @@ internal fun InfoTab(
                         }
                         Spacer(Modifier.width(8.dp))
                         SmallButton("复制", true) { copyToClipboard(dir) }
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
-                // ------------------------------------------------ 诊断（运行状态）
-                SaltGroup {
-                    GroupHeader("诊断")
-                    ItemRow("窗口样式", HostAppearance.lastStyleName)
-                    RowDivider()
-                    ItemRow(
-                        "背景",
-                        if (bridgeOn) {
-                            if (HostAppearance.isMaterialStyle()) "跟随窗口材质（透明）" else "经典纯色"
-                        } else {
-                            "降级：桥接层未生效，使用纯色背景"
-                        }
-                    )
-                    RowDivider()
-                    ItemRow(
-                        "材质桥接",
-                        if (bridgeOn) {
-                            "已生效 · 隐藏=" + com.spwmods.waerwak.listenstats.ui.HostMaterialState.hidden
-                        } else {
-                            "未生效（replaceComposable 未进入组合）"
-                        }
-                    )
-                    RowDivider()
-                    ItemRow("计时诊断", timingDiagnosticsText())
-                    RowDivider()
-                    val timingOn = remember { mutableStateOf(com.spwmods.waerwak.listenstats.stats.TimingDiag.enabled) }
-                    val exportHint = remember { mutableStateOf("") }
-                    AdjustableRow(
-                        label = "逐帧计时诊断",
-                        value = if (timingOn.value) "已开启" else "关闭",
-                        onClick = {
-                            val next = !timingOn.value
-                            timingOn.value = next
-                            com.spwmods.waerwak.listenstats.stats.TimingDiag.setEnabled(next)
-                            com.spwmods.waerwak.listenstats.ui.UiStateStore.saveTimingDiag(next)
-                            if (!next) exportHint.value = ""
-                        }
-                    )
-                    RowDivider()
-                    Row(
-                        Modifier.fillMaxWidth().height(34.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "计时日志",
-                            fontSize = SaltDesign.fontSizeMain,
-                            color = p.text,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Text(
-                            exportHint.value,
-                            fontSize = SaltDesign.fontSizeSub,
-                            color = p.subText
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        SmallButton("导出", true) {
-                            val t = Thread({
-                                val dir = com.spwmods.waerwak.listenstats.stats.StatsStore.dataDirOrNull()
-                                if (dir == null) {
-                                    exportHint.value = "没有数据目录"
-                                } else {
-                                    val n = com.spwmods.waerwak.listenstats.stats.TimingDiag.dump(dir)
-                                    exportHint.value = when {
-                                        n < 0 -> "导出失败"
-                                        n == 0 -> "暂无逐帧数据"
-                                        else -> "已导出 " + n + " 帧"
-                                    }
-                                }
-                            }, "listen-stats-diag")
-                            t.isDaemon = true
-                            t.start()
-                        }
-                    }
-                    RowDivider()
-                    ItemRow("数据读取", com.spwmods.waerwak.listenstats.stats.StatsStore.loadError() ?: "正常")
-                    RowDivider()
-                    ItemRow("封面缓存", com.spwmods.waerwak.listenstats.ui.CoverCache.statsText())
-                    RowDivider()
-                    ItemRow("标题栏按钮", com.spwmods.waerwak.listenstats.ui.TitlebarButton.statusText())
-                    RowDivider()
-                    val hooks = hookHealth()
-                    Row(
-                        Modifier.fillMaxWidth().height(30.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "注入状态",
-                            fontSize = SaltDesign.fontSizeMain,
-                            color = p.text,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Text(
-                            hooks.second,
-                            fontSize = SaltDesign.fontSizeSub,
-                            color = if (hooks.first) p.subText else p.error
-                        )
-                    }
-                    RowDivider()
-                    Row(
-                        Modifier.fillMaxWidth().height(34.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "诊断信息",
-                            fontSize = SaltDesign.fontSizeMain,
-                            color = p.text,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Surface(
-                            onClick = {
-                                val ok = copyToClipboard(
-                                    buildDiagnostics(snap, dir, trackCount, eventLines, bridgeOn)
-                                )
-                                toast(if (ok) "诊断信息已复制到剪贴板" else "复制失败", ok)
-                            },
-                            shape = SaltDesign.shapeSmall,
-                            color = p.highlight.copy(alpha = 0.16f)
-                        ) {
-                            Box(
-                                Modifier.height(24.dp).padding(horizontal = 10.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text("复制", fontSize = SaltDesign.fontSizeSub, color = p.highlight)
-                            }
-                        }
                     }
                 }
             }
@@ -437,9 +283,183 @@ internal fun InfoTab(
                 modifier = Modifier.padding(vertical = 6.dp)
             )
         }
+        Spacer(Modifier.height(12.dp))
+        // ------------------------------------------------ 高级信息（默认折叠）
+        SaltGroup {
+            Row(
+                Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(Modifier.weight(1f)) {
+                    GroupHeader("高级信息")
+                }
+                SmallButton(if (advancedOpen.value) "折叠" else "展开", true) {
+                    advancedOpen.value = !advancedOpen.value
+                }
+            }
+            if (advancedOpen.value) {
+                Text(
+                    "以下为排查问题用的版本、运行状态与诊断信息，普通使用无需关注。",
+                    fontSize = SaltDesign.fontSizeSub,
+                    color = p.subText
+                )
+                RowDivider()
+                ItemRow("插件 ID", snap.pluginId)
+                RowDivider()
+                ItemRow("渠道", snap.channel)
+                RowDivider()
+                ItemRow("Kotlin", snap.kotlinVersion)
+                RowDivider()
+                ItemRow("Compose", snap.composeVersion)
+                RowDivider()
+                ItemRow("位置回调", snap.positionCallbacks.toString() + " 次")
+                RowDivider()
+                ItemRow("事件行数", eventLines.toString())
+                RowDivider()
+                Column(Modifier.padding(vertical = 6.dp)) {
+                    Text("存储占用", fontSize = SaltDesign.fontSizeMain, color = p.text)
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        StatsStore.storageSummary(),
+                        fontSize = SaltDesign.fontSizeSub,
+                        color = p.subText
+                    )
+                }
+                RowDivider()
+                ItemRow("上次检测", formatDateTime(missingAt))
+                RowDivider()
+                ItemRow(
+                    "检测结果",
+                    if (MissingState.lastMessage.value.isNotBlank()) MissingState.lastMessage.value else "-"
+                )
+                RowDivider()
+                ItemRow("窗口样式", HostAppearance.lastStyleName)
+                RowDivider()
+                ItemRow(
+                    "背景",
+                    if (bridgeOn) {
+                        if (HostAppearance.isMaterialStyle()) "跟随窗口材质（透明）" else "经典纯色"
+                    } else {
+                        "降级：桥接层未生效，使用纯色背景"
+                    }
+                )
+                RowDivider()
+                ItemRow(
+                    "材质桥接",
+                    if (bridgeOn) {
+                        "已生效 · 隐藏=" + com.spwmods.waerwak.listenstats.ui.HostMaterialState.hidden
+                    } else {
+                        "未生效（replaceComposable 未进入组合）"
+                    }
+                )
+                RowDivider()
+                ItemRow("计时诊断", timingDiagnosticsText())
+                RowDivider()
+                val timingOn = remember { mutableStateOf(com.spwmods.waerwak.listenstats.stats.TimingDiag.enabled) }
+                val exportHint = remember { mutableStateOf("") }
+                AdjustableRow(
+                    label = "逐帧计时诊断",
+                    value = if (timingOn.value) "已开启" else "关闭",
+                    onClick = {
+                        val next = !timingOn.value
+                        timingOn.value = next
+                        com.spwmods.waerwak.listenstats.stats.TimingDiag.setEnabled(next)
+                        com.spwmods.waerwak.listenstats.ui.UiStateStore.saveTimingDiag(next)
+                        if (!next) exportHint.value = ""
+                    }
+                )
+                RowDivider()
+                Row(
+                    Modifier.fillMaxWidth().height(34.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "计时日志",
+                        fontSize = SaltDesign.fontSizeMain,
+                        color = p.text,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        exportHint.value,
+                        fontSize = SaltDesign.fontSizeSub,
+                        color = p.subText
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    SmallButton("导出", true) {
+                        val t = Thread({
+                            val d = com.spwmods.waerwak.listenstats.stats.StatsStore.dataDirOrNull()
+                            if (d == null) {
+                                exportHint.value = "没有数据目录"
+                            } else {
+                                val n = com.spwmods.waerwak.listenstats.stats.TimingDiag.dump(d)
+                                exportHint.value = when {
+                                    n < 0 -> "导出失败"
+                                    n == 0 -> "暂无逐帧数据"
+                                    else -> "已导出 " + n + " 帧"
+                                }
+                            }
+                        }, "listen-stats-diag")
+                        t.isDaemon = true
+                        t.start()
+                    }
+                }
+                RowDivider()
+                ItemRow("数据读取", com.spwmods.waerwak.listenstats.stats.StatsStore.loadError() ?: "正常")
+                RowDivider()
+                ItemRow("封面缓存", com.spwmods.waerwak.listenstats.ui.CoverCache.statsText())
+                RowDivider()
+                ItemRow("标题栏按钮", com.spwmods.waerwak.listenstats.ui.TitlebarButton.statusText())
+                RowDivider()
+                val hooks = hookHealth()
+                Row(
+                    Modifier.fillMaxWidth().height(30.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "注入状态",
+                        fontSize = SaltDesign.fontSizeMain,
+                        color = p.text,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        hooks.second,
+                        fontSize = SaltDesign.fontSizeSub,
+                        color = if (hooks.first) p.subText else p.error
+                    )
+                }
+                RowDivider()
+                Row(
+                    Modifier.fillMaxWidth().height(34.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "诊断信息",
+                        fontSize = SaltDesign.fontSizeMain,
+                        color = p.text,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Surface(
+                        onClick = {
+                            val ok = copyToClipboard(
+                                buildDiagnostics(snap, dir, trackCount, eventLines, bridgeOn)
+                            )
+                            toast(if (ok) "诊断信息已复制到剪贴板" else "复制失败", ok)
+                        },
+                        shape = SaltDesign.shapeSmall,
+                        color = p.highlight.copy(alpha = 0.16f)
+                    ) {
+                        Box(
+                            Modifier.height(24.dp).padding(horizontal = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("复制", fontSize = SaltDesign.fontSizeSub, color = p.highlight)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
-
 
 /** 「标签 + 当前值 + 调整按钮」一行（计数门槛 / 明细保留 / 字体大小共用） */
 @Composable
