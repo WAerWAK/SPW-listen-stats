@@ -237,5 +237,19 @@ Kotlin 2.4.21 + Compose 插件 in-process 编译时，`firstOrNull { }` / `map {
 | 位置是毫秒 long | BASS 字节位置换算，无整秒取整 | 可以按"经过的时间"计时，位置只作推进证据 |
 | 暂停期间不再推送位置 | 暂停时定时任务被取消 | 暂停时长天然不会计入 |
 | 宿主官方听歌口径 = 墙钟 | `ListenSession` 用 `nanoTime` 累计 | 用户拿宿主统计对照时，倍速/暂停两侧口径一致；不一致才是我们的 bug |
-| 事件可预取歌词 | 歌词加载回调不保证只对"当前曲目"触发 | 不能用歌词回调当切歌信号，应以 `getCurrentMediaItem().id` 为权威 |
+| 歌词回调可被其它插件短路 | 宿主 `loadLyrics` 遍历扩展时，任一插件 `updateLyrics`/`onBeforeLoadLyrics` 返回非 null 就跳出循环；排后面的扩展收不到回调（1.19.3 无"预取下一首"路径） | **不能用歌词回调当切歌/会话信号**，一律以 `getCurrentMediaItem().id` 为权威（1.5.1 已改） |
 
+
+## 7. 宿主内部能力（非官方 API，已做结构校验）
+
+> 这些不在 Workshop 官方 API 里，但 1.19.3 实测可用。使用前必须校验结构、校验失败就放弃，
+> 宿主升级后由 `verifyHostApi` / 回归测试尽早发现。
+
+| 能力 | 入口 | 用途 | 校验方式 |
+|---|---|---|---|
+| 当前倍速 | `com.xuncorp.voxzen.service.PlaybackController.getPlaybackSpeed(): Float` | 计时容差/停摆判据按真实倍速换算 | 反射取 `INSTANCE` + 方法存在；失败回退 1.0/4x |
+| 单曲播放 | `PiscesMediaItem(String×6)` → `PlaybackController.addToPlay/prepare/play` | 排行榜双击播放 | Metadata data2 字段顺序 = id/title/artist/album/albumArtist/path；构造器/方法签名校验；文件存在、id 一致、主线程执行 |
+
+- 单曲播放必须按 `addToPlay → prepare → play` 三步：只 addToPlay 会更新队列但不出声。
+- 曲目查询用官方 `WorkshopApi.library.getTrackById(id)`（CompletionStage，10 秒超时）。
+- 任何校验失败都提示"当前播放器的播放接口不受支持"，不影响统计与面板其它功能。
