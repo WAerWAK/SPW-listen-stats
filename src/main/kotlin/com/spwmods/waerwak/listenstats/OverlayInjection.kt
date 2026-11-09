@@ -228,6 +228,23 @@ object OverlayInjection {
         toast("已打开统计面板，可在「信息 → 采集」调整计数门槛", true)
     }
 
+    /** 从注入目标里取出内层材质点位；版本表/缓存没给出时返回 null */
+    private fun innerMaterialSite(targets: com.spwmods.waerwak.listenstats.ui.HostUiTargets): HostLayerSite? {
+        if (targets.contentOwner.isEmpty() || targets.contentMethod.isEmpty() ||
+            targets.contentDescriptor.isEmpty() || targets.contentCaller.isEmpty()
+        ) {
+            return null
+        }
+        return HostLayerSite(
+            com.spwmods.waerwak.listenstats.ui.discovery.HostMethod(
+                targets.contentOwner.replace('.', '/'),
+                targets.contentMethod,
+                targets.contentDescriptor
+            ),
+            targets.contentCaller.replace('.', '/')
+        )
+    }
+
     /**
      * 尝试包住宿主 Layer
      *
@@ -307,19 +324,53 @@ object OverlayInjection {
                 ) { _: UiHookCall ->
                     OverlayHost()
                 }
-                // 背景材质桥接层（可选）：替换宿主 AppNavigation 调用，面板打开时隐藏宿主内容
-                // 失败则静默降级为现有截图/不透明背景
-                try {
-                    materialHandle = WorkshopApi.hookRegistrar.replaceComposable(
-                        className = TARGET_CLASS,
-                        methodName = TARGET_METHOD,
-                        inClass = uiTargets.pageCaller
-                    ) { _: UiHookCall ->
-                        com.spwmods.waerwak.listenstats.ui.HostMaterialLayer()
+                // 背景材质桥接层（可选）：优先替换 AppNavigation **内部**的宿主内容调用，
+                // 这样不会被其它插件（如 SPW-Lyrics，priority 80）抢占同一替换点；
+                // 找不到内层点时回退旧做法（替换 AppNavigation 调用）。
+                // 都失败则静默降级为不透明背景。
+                val innerSite = innerMaterialSite(uiTargets)
+                if (innerSite != null) {
+                    try {
+                        val innerMethod = com.spwmods.waerwak.listenstats.ui.resolveComposableMethod(innerSite)
+                        materialHandle = WorkshopApi.hookRegistrar.replaceComposable(
+                            className = innerSite.target.dottedOwner(),
+                            methodName = innerSite.target.name,
+                            inClass = innerSite.caller.replace('/', '.'),
+                            parameterTypes = listOf(
+                                "androidx.compose.ui.Modifier",
+                                "kotlin.jvm.functions.Function3"
+                            )
+                        ) { call: UiHookCall ->
+                            com.spwmods.waerwak.listenstats.ui.HostInnerMaterialStage(call, innerMethod)
+                        }
+                        writeDiag(
+                            "material",
+                            "inner  " + innerSite.target.owner + "#" + innerSite.target.name +
+                                " @ " + innerSite.caller
+                        )
+                    } catch (t: Throwable) {
+                        writeDiag(
+                            "material",
+                            "inner-failed " + t.javaClass.simpleName + ": " + t.message
+                        )
+                        materialHandle = null
                     }
-                } catch (t: Throwable) {
-                    System.err.println("[listen-stats] 材质桥接层注册失败（降级为不透明背景）: ${t.message}")
-                    materialHandle = null
+                }
+                if (materialHandle == null) {
+                    try {
+                        materialHandle = WorkshopApi.hookRegistrar.replaceComposable(
+                            className = TARGET_CLASS,
+                            methodName = TARGET_METHOD,
+                            inClass = uiTargets.pageCaller
+                        ) { _: UiHookCall ->
+                            com.spwmods.waerwak.listenstats.ui.HostMaterialLayer()
+                        }
+                        writeDiag("material", "appnav（内层点不可用，回退旧点位）")
+                    } catch (t: Throwable) {
+                        System.err.println("[listen-stats] 材质桥接层注册失败（降级为不透明背景）: " + t.message)
+                        materialHandle = null
+                        writeDiag("material", "none " + t.javaClass.simpleName + ": " + t.message)
+                    }
                 }
             }
             // 读取 UI 状态（内容宽度百分比等）

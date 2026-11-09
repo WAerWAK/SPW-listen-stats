@@ -24,7 +24,7 @@ data class ResolvedHostTargets(
 object HostTargetResolver {
 
     private const val CACHE_FILE = "host-targets.txt"
-    private const val FORMAT = 1
+    private const val FORMAT = 2
 
     private var memory: ResolvedHostTargets? = null
     private var memoryVersion: String = ""
@@ -121,6 +121,14 @@ object HostTargetResolver {
                 layer = HostLayerSite(HostMethod(parts[0], parts[1], parts[2]), parts[3])
             }
         }
+        var content: HostLayerSite? = null
+        val contentText = map["content"]
+        if (contentText != null && contentText != "none") {
+            val parts = contentText.split('|')
+            if (parts.size == 5) {
+                content = HostLayerSite(HostMethod(parts[0], parts[1], parts[2]), parts[3])
+            }
+        }
         val targets = HostUiTargets(
             pageCaller = page.caller,
             titlebarCaller = entry.caller,
@@ -128,9 +136,13 @@ object HostTargetResolver {
             reuseHostCaption = true,
             captionClass = control.method.dottedOwner(),
             debugCaptionMethod = entry.method.name,
-            captionMethodName = control.method.name
+            captionMethodName = control.method.name,
+            contentOwner = if (content == null) "" else content.target.owner.replace('/', '.'),
+            contentMethod = if (content == null) "" else content.target.name,
+            contentDescriptor = if (content == null) "" else content.target.descriptor,
+            contentCaller = if (content == null) "" else content.caller.replace('/', '.')
         )
-        return DiscoveredUiTargets(targets, layer)
+        return DiscoveredUiTargets(targets, layer, content)
     }
 
     private class SiteRef(val method: HostMethod, val caller: String)
@@ -174,6 +186,13 @@ object HostTargetResolver {
         } else {
             sb.append("layer=").append(layer.target.owner).append('|').append(layer.target.name).append('|')
                 .append(layer.target.descriptor).append('|').append(layer.caller).append('\n')
+        }
+        val content = discovered.content
+        if (content == null) {
+            sb.append("content=none\n")
+        } else {
+            sb.append("content=").append(content.target.owner).append('|').append(content.target.name).append('|')
+                .append(content.target.descriptor).append('|').append(content.caller).append('\n')
         }
         val tmp = File(file.parentFile, CACHE_FILE + ".tmp")
         try {

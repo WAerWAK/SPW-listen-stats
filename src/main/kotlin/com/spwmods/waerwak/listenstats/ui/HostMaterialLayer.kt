@@ -127,6 +127,45 @@ internal fun resolveLayerMethod(site: HostLayerSite): Method {
 }
 
 /**
+ * 解析内层 composable 方法（签名由发现结果给出）
+ */
+internal fun resolveComposableMethod(site: HostLayerSite): Method {
+    val loader = HostMaterialState::class.java.classLoader
+    val clazz = Class.forName(site.target.dottedOwner(), false, loader)
+    val types = java.lang.invoke.MethodType
+        .fromMethodDescriptorString(site.target.descriptor, loader)
+        .parameterArray()
+    val m = clazz.getDeclaredMethod(site.target.name, *types)
+    check(java.lang.reflect.Modifier.isStatic(m.modifiers)) { "内层 composable 必须是静态方法" }
+    m.isAccessible = true
+    return m
+}
+
+/**
+ * 内层材质阶段：替换 AppNavigation **内部**的宿主内容调用（如 SharedTransitionLayout），
+ * 面板打开时把宿主内容移出屏幕，让窗口材质透出。
+ *
+ * 与"替换 AppNavigation 根"相比：不与被其它插件用高优先级抢占的替换点竞争，
+ * 只要宿主自己还会组合 AppNavigation（SPW-Lyrics 的 HostLyricsSurface 会），材质就能生效。
+ */
+@Composable
+fun HostInnerMaterialStage(call: UiHookCall, innerMethod: Method) {
+    DisposableEffect(Unit) {
+        HostMaterialState.bridgeAvailable = true
+        HostMaterialState.layerMode = true
+        onDispose {
+            HostMaterialState.bridgeAvailable = false
+            HostMaterialState.layerMode = false
+        }
+    }
+    val arg0 = call.getArgument(0)
+    val arg1 = call.getArgument(1)
+    RetainedHostContent(HostMaterialState.hidden) {
+        innerMethod.invoke(null, arg0, arg1, currentComposer, 0, 0)
+    }
+}
+
+/**
  * 包住宿主 Layer 的入口（B2 方案）
  *
  * 与之相比，替换 AppNavigation 会和所有插件抢同一个替换点；包住 Layer 只影响自己这一层，

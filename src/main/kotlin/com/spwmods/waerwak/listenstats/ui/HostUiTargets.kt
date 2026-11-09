@@ -38,7 +38,17 @@ data class HostUiTargets(
     /** 标题栏 DebugCaptionButton 模板的方法名（结构化发现会给出实测值） */
     val debugCaptionMethod: String = DEFAULT_CAPTION_METHOD,
     /** caption button 组件里带图标槽位宽度的重载方法名（反射调用用） */
-    val captionMethodName: String = DEFAULT_CAPTION_OVERLOAD_METHOD
+    val captionMethodName: String = DEFAULT_CAPTION_OVERLOAD_METHOD,
+    /**
+     * 导航内容 composable（只覆盖内容区）
+     *
+     * 用于多插件共存：替换它而不是替换 AppNavigation 根，避免与其它插件抢同一注入点；
+     * 三者都非空才使用（结构化发现或版本表给出）。
+     */
+    val contentOwner: String = "",
+    val contentMethod: String = "",
+    val contentDescriptor: String = "",
+    val contentCaller: String = ""
 ) {
     companion object {
 
@@ -68,7 +78,14 @@ data class HostUiTargets(
             pageCaller = "androidx.compose.ui.\u024e",
             titlebarCaller = "androidx.compose.ui.\u0a88",
             debugCaption = "androidx.compose.ui.\u0755",
-            reuseHostCaption = true
+            reuseHostCaption = true,
+            // 内层材质点位：AppNavigation 方法体内唯一的 SharedTransitionLayout 调用
+            // （不被 SPW-Lyrics 等同点替换插件争用）
+            contentOwner = "androidx.compose.animation.SharedTransitionScopeKt",
+            contentMethod = "SharedTransitionLayout",
+            contentDescriptor = "(Landroidx/compose/ui/Modifier;Lkotlin/jvm/functions/Function3;" +
+                "Landroidx/compose/runtime/Composer;II)V",
+            contentCaller = "com.xuncorp.voxzen.ui.navigation.AppNavigationKt"
         )
 
         /**

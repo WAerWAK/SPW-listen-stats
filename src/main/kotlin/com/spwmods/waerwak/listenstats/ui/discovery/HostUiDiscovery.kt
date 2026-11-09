@@ -20,7 +20,9 @@ data class HostLayerSite(val target: HostMethod, val caller: String)
 
 data class DiscoveredUiTargets(
     val targets: HostUiTargets,
-    val layer: HostLayerSite?
+    val layer: HostLayerSite?,
+    /** 导航内容 composable（只覆盖内容区；不与替换 AppNavigation 的插件抢同一点位） */
+    val content: HostLayerSite?
 )
 
 object HostUiDiscovery {
@@ -28,6 +30,8 @@ object HostUiDiscovery {
     private const val NAV_OWNER = "com/xuncorp/voxzen/ui/navigation/AppNavigationKt"
     private const val NAV_METHOD = "AppNavigation"
     private const val NAV_DESC = "(Landroidx/compose/runtime/Composer;I)V"
+    private const val SHARED_TRANSITION_PREFIX = "androidx/compose/animation/SharedTransitionScopeKt"
+    private const val NAV_DISPLAY_PREFIX = "androidx/navigation3/ui/NavDisplayKt"
 
     /** 宿主 caption button 的 10 参重载（含图标槽位宽度 float） */
     private const val CAPTION10 =
@@ -72,6 +76,7 @@ object HostUiDiscovery {
         }
 
         val layer = findLayer(index, pageCaller)
+        val content = findInnerMaterialSite(index)
 
         val targets = HostUiTargets(
             pageCaller = pageCaller.replace('/', '.'),
@@ -80,9 +85,54 @@ object HostUiDiscovery {
             reuseHostCaption = true,
             captionClass = control.owner.replace('/', '.'),
             debugCaptionMethod = predecessor.name,
-            captionMethodName = control.name
+            captionMethodName = control.name,
+            contentOwner = if (content == null) "" else content.target.owner.replace('/', '.'),
+            contentMethod = if (content == null) "" else content.target.name,
+            contentDescriptor = if (content == null) "" else content.target.descriptor,
+            contentCaller = if (content == null) "" else content.caller.replace('/', '.')
         )
-        return DiscoveredUiTargets(targets, layer)
+        return DiscoveredUiTargets(targets, layer, content)
+    }
+
+    /**
+     * 内层材质点位（隐藏宿主内容用）
+     *
+     * 多插件共存的关键：AppNavigation 这个"整页替换点"会被其它插件用更高的
+     * replaceComposable priority 抢走（SPW-Lyrics 用 80，本插件默认 50），
+     * 但对方替换的实现里仍会反射组合宿主 AppNavigation，所以挂到 AppNavigation
+     * **内部**的调用点即可绕过争用：
+     *  - 首选：AppNavigation 方法体内唯一的 SharedTransitionLayout 调用（1.19.3 类内唯一）；
+     *  - 备用：AppNavigationKt.Content 方法体内唯一的 NavDisplay 调用。
+     * 只有类内唯一才返回，否则回退旧点位（宁可纯色也不乱包）。
+     */
+    private fun findInnerMaterialSite(index: HostBytecodeIndex): HostLayerSite? {
+        val shared = uniqueClassWideCall(index, SHARED_TRANSITION_PREFIX)
+        if (shared != null) return HostLayerSite(shared, NAV_OWNER)
+        val navDisplay = uniqueClassWideCall(index, NAV_DISPLAY_PREFIX)
+        if (navDisplay != null) return HostLayerSite(navDisplay, NAV_OWNER)
+        return null
+    }
+
+    /** 找 NAV_OWNER 类里对某个前缀 owner 的唯一调用（整类计数 = 1） */
+    private fun uniqueClassWideCall(index: HostBytecodeIndex, ownerPrefix: String): HostMethod? {
+        var found: HostMethod? = null
+        var count = 0
+        var i = 0
+        while (i < index.methods.size) {
+            var body = index.methods[i]
+            i++
+            if (body.method.owner != NAV_OWNER) continue
+            var j = 0
+            while (j < body.calls.size) {
+                var call = body.calls[j]
+                j++
+                if (!call.owner.startsWith(ownerPrefix)) continue
+                count++
+                if (found == null) found = call
+            }
+        }
+        if (count != 1) return null
+        return found
     }
 
     // ------------------------------------------------------------ 面板

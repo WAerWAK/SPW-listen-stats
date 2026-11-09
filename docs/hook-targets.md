@@ -44,6 +44,22 @@
 > 打开开关是 `OverlayInjection.USE_LAYER_INJECTION`。重新打开前需要先解决"只隐藏在内容区"的方案，
 > 并和"多插件共存"一起验证。
 
+## 2.5 内层材质点位（多插件共存用，1.5.1 起）
+
+替换 AppNavigation **根**会被其它插件用更高的 `replaceComposable` priority 抢占（宿主只渲染优先级最高的那一个，
+不报错、不链式）。SPW-Lyrics 3.4.0 用 priority=80 抢占同一处；本插件默认 priority=50 会静默失效 →
+材质层不组合 → 面板变实色。因此材质隐藏改挂 **AppNavigation 内部**、对方不 hook 的调用点：
+
+| 优先级 | 目标 | 1.19.3 值 | 判据 |
+|---|---|---|---|
+| 首选 | SharedTransitionLayout | `androidx.compose.animation.SharedTransitionScopeKt.SharedTransitionLayout(Modifier,Function3,Composer,II)V` @ inClass `com.xuncorp.voxzen.ui.navigation.AppNavigationKt` | AppNavigationKt 类内**唯一** SharedTransitionLayout 调用 |
+| 备用 | NavDisplay | `androidx/navigation3/ui/NavDisplayKt.NavDisplay(...)` @ inClass AppNavigationKt | 类内唯一 NavDisplay 调用（SharedTransitionLayout 判据失效时） |
+
+- 面板入口仍是 `afterComposable(AppNavigation, inClass=pageCaller)`：AFTER 与 REPLACE 独立、永远执行，
+  所以即使根替换被抢，面板仍然出现（只是材质曾失效）。
+- 注入成功时 `hook-diag.txt` 写 `material  inner <owner>#<method> @ <caller>`；失败回退旧点位写 `material  appnav`。
+- 旧根替换仅在内层点发现失败时使用（单插件场景同样走内层点，行为一致）。
+
 ## 3. 历史目标（版本表回退用）
 
 | 用途 | SPW 1.19.0 | SPW 1.19.1 |

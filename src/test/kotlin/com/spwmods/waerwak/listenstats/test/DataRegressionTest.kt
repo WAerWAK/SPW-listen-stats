@@ -641,6 +641,12 @@ fun main() {
             check(t.debugCaptionMethod == golden.debugCaptionMethod, "debugCaptionMethod 不一致")
             check(t.captionMethodName == golden.captionMethodName, "captionMethodName 不一致")
             check(discovered.layer != null, "应能发现材质 Layer 位点")
+            check(t.contentOwner == golden.contentOwner, "内层材质点 owner 不一致：" + t.contentOwner)
+            check(t.contentMethod == golden.contentMethod, "内层材质点 method 不一致")
+            check(t.contentDescriptor == golden.contentDescriptor, "内层材质点 descriptor 不一致")
+            check(t.contentCaller == golden.contentCaller, "内层材质点 caller 不一致：" + t.contentCaller)
+            check(discovered.content != null, "应能发现内层材质点")
+            check(discovered.layer != null, "应能发现材质 Layer 位点")
             check(elapsed < 30_000L, "扫描耗时过长：" + elapsed + "ms")
             println("    （扫描 " + index.methods.size + " 个方法，用时 " + elapsed + "ms）")
         }
