@@ -30,6 +30,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.spwmods.waerwak.listenstats.stats.MissingStore
 import com.spwmods.waerwak.listenstats.stats.StatsStore
 import com.spwmods.waerwak.listenstats.stats.CountRule
@@ -188,7 +189,6 @@ internal fun InfoTab(
                         }
                     )
                 }
-                Spacer(Modifier.height(12.dp))
                 Spacer(Modifier.height(12.dp))
                 // ------------------------------------------------ 采集与数据（合并；普通用户可操作项）
                 SaltGroup {
@@ -463,11 +463,14 @@ internal fun InfoTab(
 /** 高级信息内的小标题：弱化颜色 + 上下留白，用来分区（环境 / 运行状态 / 诊断…） */
 @Composable
 private fun AdvancedSection(title: String) {
-    Column(Modifier.padding(top = 10.dp, bottom = 4.dp)) {
+    // 比正文大一档、行高更松，作为分区标题
+    Column(Modifier.padding(top = 14.dp, bottom = 6.dp)) {
         Text(
             title,
-            fontSize = SaltDesign.fontSizeSub,
-            color = LocalSaltPalette.current.labelAccent
+            fontSize = SaltDesign.fontSizeSectionTitle,
+            fontWeight = SaltDesign.weightSectionTitle,
+            lineHeight = 22.sp,
+            color = LocalSaltPalette.current.text
         )
     }
 }
