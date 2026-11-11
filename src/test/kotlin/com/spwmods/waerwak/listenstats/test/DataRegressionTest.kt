@@ -13,7 +13,13 @@ import com.spwmods.waerwak.listenstats.stats.StatsThresholds
 import com.spwmods.waerwak.listenstats.stats.TrackAgg
 import com.spwmods.waerwak.listenstats.stats.TrackResolver
 import com.spwmods.waerwak.listenstats.ui.HostUiTargets
+import com.spwmods.waerwak.listenstats.ui.HookFailurePolicy
+import com.spwmods.waerwak.listenstats.ui.HookHandles
 import com.spwmods.waerwak.listenstats.ui.discovery.HostBytecodeIndex
+import com.spwmods.waerwak.listenstats.ui.discovery.HostField
+import com.spwmods.waerwak.listenstats.ui.discovery.HostMethod
+import com.spwmods.waerwak.listenstats.ui.discovery.HostMethodBody
+import com.spwmods.waerwak.listenstats.ui.discovery.HostTargetResolver
 import com.spwmods.waerwak.listenstats.ui.discovery.HostUiDiscovery
 import com.xuncorp.spw.workshop.api.PlaybackExtensionPoint
 import java.io.File
@@ -647,9 +653,176 @@ fun main() {
             check(t.contentCaller == golden.contentCaller, "内层材质点 caller 不一致：" + t.contentCaller)
             check(discovered.content != null, "应能发现内层材质点")
             check(discovered.layer != null, "应能发现材质 Layer 位点")
+            check(t.titlebarAvailable, "1.19.3 应能发现标题栏入口")
+            check(t.warnings.isEmpty(), "1.19.3 不应有降级警告：" + t.warnings)
             check(elapsed < 30_000L, "扫描耗时过长：" + elapsed + "ms")
             println("    （扫描 " + index.methods.size + " 个方法，用时 " + elapsed + "ms）")
         }
+    }
+
+    test("句柄所有权：逆序关闭，失败的句柄保留") {
+        val closed = ArrayList<String>()
+        val handles = HookHandles()
+        handles += AutoCloseable { closed.add("a") }
+        handles += AutoCloseable { closed.add("b") }
+        handles += AutoCloseable {
+            closed.add("c")
+            throw IllegalStateException("最后一个关不上")
+        }
+        var threw = false
+        try {
+            handles.close()
+        } catch (t: Throwable) {
+            threw = true
+        }
+        check(threw, "关闭失败应抛异常")
+        check(closed == arrayListOf("c", "b", "a"), "应按逆序关闭，实际 " + closed)
+        check(handles.size == 1, "失败的句柄应保留，实际剩 " + handles.size)
+    }
+
+    test("注册失败：回滚完整与不完整两种语义") {
+        val clean = HookHandles()
+        clean += AutoCloseable { }
+        val complete = clean.registrationFailed(IllegalStateException("注册失败"))
+        check(complete.rollbackComplete, "全部关闭成功应视为回滚完整")
+        check(complete.remaining.isEmpty, "回滚完整时不应有剩余句柄")
+
+        val dirty = HookHandles()
+        dirty += AutoCloseable { throw IllegalStateException("无法释放") }
+        val incomplete = dirty.registrationFailed(IllegalStateException("注册失败"))
+        check(!incomplete.rollbackComplete, "存在未释放句柄应视为回滚不完整")
+        check(incomplete.remaining.size == 1, "剩余句柄应为 1，实际 " + incomplete.remaining.size)
+    }
+
+    test("重试策略：权限/中断/取消不重试") {
+        check(HookFailurePolicy.noRetry(SecurityException("denied")), "权限不足不应重试")
+        check(HookFailurePolicy.noRetry(InterruptedException("stop")), "中断不应重试")
+        check(
+            HookFailurePolicy.noRetry(java.util.concurrent.CancellationException("cancel")),
+            "取消不应重试"
+        )
+        check(
+            !HookFailurePolicy.noRetry(IllegalStateException("结构不唯一")),
+            "普通结构错误应允许重试"
+        )
+        check(
+            HookFailurePolicy.noRetry(RuntimeException("wrap", SecurityException("denied"))),
+            "包装在 cause 里的权限异常也应识别"
+        )
+    }
+
+    test("标题栏发现失败时仍产出面板注入点（可选组降级）") {
+        val nav = HostMethod(
+            "com/xuncorp/voxzen/ui/navigation/AppNavigationKt",
+            "AppNavigation",
+            "(Landroidx/compose/runtime/Composer;I)V"
+        )
+        val caller = "androidx/compose/ui/degradedpage"
+        val body = HostMethodBody(
+            HostMethod(caller, "Page", "(Landroidx/compose/runtime/Composer;I)V"),
+            0x0001 or 0x0008,
+            arrayListOf(nav),
+            ArrayList<HostField>()
+        )
+        val index = HostBytecodeIndex(arrayListOf(body), ArrayList<HostField>())
+        val discovered = HostUiDiscovery.discover(index)
+        check(
+            discovered.targets.pageCaller == caller.replace('/', '.'),
+            "面板点位应仍可用：" + discovered.targets.pageCaller
+        )
+        check(!discovered.targets.titlebarAvailable, "没有标题栏结构时应标记为不可用")
+        check(discovered.targets.debugCaption.isEmpty(), "降级时不应留下标题栏目标")
+        check(discovered.targets.titlebarCaller.isEmpty(), "降级时不应留下标题栏调用点")
+        var hasTitlebarWarning = false
+        var i = 0
+        while (i < discovered.targets.warnings.size) {
+            if (discovered.targets.warnings[i].startsWith("titlebar:")) hasTitlebarWarning = true
+            i++
+        }
+        check(hasTitlebarWarning, "应记录标题栏降级原因：" + discovered.targets.warnings)
+    }
+
+    test("注入点缓存 format 3：标题栏降级可读，旧格式被拒") {
+        val dir = File(
+            System.getProperty("java.io.tmpdir"),
+            "spw-listenstats-cache-" + System.nanoTime()
+        )
+        dir.mkdirs()
+        val file = File(dir, "host-targets.txt")
+        val text = StringBuilder()
+        text.append("format=3\n")
+        text.append("plugin=9.9.9\n")
+        text.append("path=/host.jar\n")
+        text.append("sha256=-\n")
+        text.append(
+            "page=com/xuncorp/voxzen/ui/navigation/AppNavigationKt|AppNavigation|" +
+                "(Landroidx/compose/runtime/Composer;I)V|androidx/compose/ui/cachedpage\n"
+        )
+        text.append("caption.entry=none\n")
+        text.append("caption.control=none\n")
+        text.append("layer=none\n")
+        text.append("content=none\n")
+        file.writeText(text.toString(), Charsets.UTF_8)
+
+        val read = HostTargetResolver.readCache(dir, "9.9.9", "/host.jar", null)
+        check(read != null, "format 3 缓存应可读")
+        check(
+            read!!.targets.pageCaller == "androidx.compose.ui.cachedpage",
+            "pageCaller 应转回点分形式：" + read.targets.pageCaller
+        )
+        check(!read.targets.titlebarAvailable, "caption=none 应解析为标题栏降级")
+        check(read.targets.warnings.isNotEmpty(), "降级应带 warning")
+
+        file.writeText(text.toString().replace("format=3", "format=2"), Charsets.UTF_8)
+        check(
+            HostTargetResolver.readCache(dir, "9.9.9", "/host.jar", null) == null,
+            "format 2 缓存应被拒绝"
+        )
+
+        file.writeText(text.toString(), Charsets.UTF_8)
+        check(
+            HostTargetResolver.readCache(dir, "1.0.0", "/host.jar", null) == null,
+            "插件版本不一致应被拒绝"
+        )
+    }
+
+    test("注入点缓存 format 3：caption.control 只有 3 段也能命中") {
+        val dir = File(
+            System.getProperty("java.io.tmpdir"),
+            "spw-listenstats-cache-full-" + System.nanoTime()
+        )
+        dir.mkdirs()
+        val file = File(dir, "host-targets.txt")
+        val text = StringBuilder()
+        text.append("format=3\n")
+        text.append("plugin=1.5.1.1\n")
+        text.append("path=/host.jar\n")
+        text.append("sha256=-\n")
+        text.append(
+            "page=com/xuncorp/voxzen/ui/navigation/AppNavigationKt|AppNavigation|" +
+                "(Landroidx/compose/runtime/Composer;I)V|page/caller\n"
+        )
+        text.append("caption.entry=entry/owner|entryMethod|(Landroidx/compose/runtime/Composer;I)V|row/caller\n")
+        text.append(
+            "caption.control=control/owner|controlMethod|" +
+                "(Lkotlin/jvm/functions/Function0;Ljava/lang/String;Landroidx/compose/ui/Modifier;Z" +
+                "Ljava/lang/String;FLkotlin/jvm/functions/Function3;Landroidx/compose/runtime/Composer;II)V\n"
+        )
+        text.append("layer=none\n")
+        text.append("content=androidx/compose/animation/SharedTransitionScopeKt|SharedTransitionLayout|" +
+            "(Landroidx/compose/ui/Modifier;Lkotlin/jvm/functions/Function3;" +
+            "Landroidx/compose/runtime/Composer;II)V|com/xuncorp/voxzen/ui/navigation/AppNavigationKt\n")
+        file.writeText(text.toString(), Charsets.UTF_8)
+
+        val read = HostTargetResolver.readCache(dir, "1.5.1.1", "/host.jar", null)
+        check(read != null, "完整缓存应命中（1.5.1 因 control 只有 3 段而永远 miss）")
+        check(read!!.targets.titlebarAvailable, "完整缓存应保留标题栏入口")
+        check(read.content != null, "内层材质点（4 段）应能解析（1.5.1 读时误要求 5 段）")
+        check(read.targets.warnings.isEmpty(), "完整缓存不应带降级警告：" + read.targets.warnings)
+        check(read.targets.pageCaller == "page.caller", "pageCaller 应为点分：" + read.targets.pageCaller)
+        check(read.targets.titlebarCaller == "row.caller", "titlebarCaller 应为点分：" + read.targets.titlebarCaller)
+        check(read.targets.captionClass == "control.owner", "captionClass 不一致：" + read.targets.captionClass)
+        check(read.targets.captionMethodName == "controlMethod", "captionMethodName 不一致")
     }
 
     test("位置粒度粗于回调频率时不少记") {

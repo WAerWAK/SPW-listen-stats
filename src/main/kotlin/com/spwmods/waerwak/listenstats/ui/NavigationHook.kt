@@ -2,7 +2,6 @@ package com.spwmods.waerwak.listenstats.ui
 
 import com.xuncorp.spw.workshop.api.UnstableSpwWorkshopApi
 import com.xuncorp.spw.workshop.api.WorkshopApi
-import com.xuncorp.spw.workshop.api.hook.HookHandle
 import com.xuncorp.spw.workshop.api.hook.MethodHook
 import com.xuncorp.spw.workshop.api.hook.MethodHookParam
 
@@ -18,6 +17,9 @@ import com.xuncorp.spw.workshop.api.hook.MethodHookParam
  * 同时接管返回：`Navigator.back()` 时若面板/弹层可见，只关闭它们，
  * 不让宿主把页面也退掉。
  *
+ * 1.5.1.1 起 `install()` 返回句柄本身（由调用方的 [HookHandles] 持有）：
+ * 释放失败时句柄不会被丢弃，调用方据此拒绝后续安装。
+ *
  * @param onPageChange 导航到其它页面
  * @param onBack 宿主触发返回；返回 true 表示已被消费（原方法不执行）
  * @param onForward 宿主触发前进（含鼠标前进侧键）；返回 true 表示已被消费（用于恢复统计面板）
@@ -28,27 +30,34 @@ object NavigationHook {
     private const val NAVIGATOR_CLASS = "com.xuncorp.voxzen.ui.navigation.Navigator"
     private const val ROUTE_CLASS = "com.xuncorp.voxzen.ui.navigation.ScreenRoute"
 
-    private val handles = ArrayList<HookHandle>(4)
+    @Volatile
+    private var installation: AutoCloseable? = null
 
     @Volatile
     var lastError: String? = null
         private set
 
-    val installed: Boolean
-        get() = handles.isNotEmpty()
+    val installed: Boolean get() = installation != null
 
+    /**
+     * 安装导航 hook
+     *
+     * @return 句柄（已安装过时返回同一个）；不可用时返回 null 并写 [lastError]。
+     *         回滚不完整时抛出 [HookRegistrationFailure]，由上层提示"需重启 SPW"。
+     */
     @Synchronized
     fun install(
         onPageChange: () -> Unit,
         onBack: () -> Boolean,
         onForward: (() -> Boolean)? = null
-    ): Boolean {
-        if (handles.isNotEmpty()) return true
+    ): AutoCloseable? {
+        val existing = installation
+        if (existing != null) return existing
         val registrar = try {
             WorkshopApi.hookRegistrar
         } catch (t: Throwable) {
             lastError = "拿不到 hookRegistrar：" + (t.message ?: t.javaClass.simpleName)
-            return false
+            return null
         }
         val routeParams = ArrayList<String>(1)
         routeParams.add(ROUTE_CLASS)
@@ -61,10 +70,11 @@ object NavigationHook {
                 }
             }
         }
+        val handles = HookHandles()
         try {
-            handles.add(registrar.hookMethod(NAVIGATOR_CLASS, "navigate", routeParams, pageChange))
-            handles.add(registrar.hookMethod(NAVIGATOR_CLASS, "replace", routeParams, pageChange))
-            handles.add(registrar.hookMethod(NAVIGATOR_CLASS, "forward", object : MethodHook() {
+            handles += registrar.hookMethod(NAVIGATOR_CLASS, "navigate", routeParams, pageChange)
+            handles += registrar.hookMethod(NAVIGATOR_CLASS, "replace", routeParams, pageChange)
+            handles += registrar.hookMethod(NAVIGATOR_CLASS, "forward", object : MethodHook() {
                 override fun before(call: MethodHookParam) {
                     // 前进优先用于恢复面板（鼠标前进侧键也会走宿主这个方法）；
                     // 其余情况仍按"换页关面板"处理。
@@ -83,8 +93,8 @@ object NavigationHook {
                         // 同上
                     }
                 }
-            }))
-            handles.add(registrar.hookMethod(NAVIGATOR_CLASS, "back", object : MethodHook() {
+            })
+            handles += registrar.hookMethod(NAVIGATOR_CLASS, "back", object : MethodHook() {
                 override fun before(call: MethodHookParam) {
                     val consumed = try {
                         onBack()
@@ -93,27 +103,33 @@ object NavigationHook {
                     }
                     if (consumed) call.setResult(null)
                 }
-            }))
-            lastError = null
-            return true
+            })
         } catch (t: Throwable) {
             lastError = t.javaClass.simpleName + "：" + (t.message ?: "")
-            uninstall()
-            return false
+            val failure = handles.registrationFailed(t)
+            // 残留句柄交给上层保留：下次启用不能在同一调用点重复注册
+            if (!failure.rollbackComplete) throw failure
+            return null
         }
+        lastError = null
+        var box: HostHookInstallation? = null
+        val session = HostHookInstallation(handles, true, onClosed = {
+            if (installation === box) installation = null
+        })
+        box = session
+        installation = session
+        return session
     }
 
+    /**
+     * 关闭导航 hook
+     *
+     * 释放失败会把异常抛出（由 [HookHandles] 保留句柄），不再静默忽略。
+     */
     @Synchronized
     fun uninstall() {
-        var i = 0
-        while (i < handles.size) {
-            try {
-                handles[i].unhook()
-            } catch (t: Throwable) {
-                // 卸载失败忽略，进程退出时随之释放
-            }
-            i++
-        }
-        handles.clear()
+        val current = installation
+        installation = null
+        if (current != null) current.close()
     }
 }

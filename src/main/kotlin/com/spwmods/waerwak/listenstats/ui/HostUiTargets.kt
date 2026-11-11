@@ -48,7 +48,16 @@ data class HostUiTargets(
     val contentOwner: String = "",
     val contentMethod: String = "",
     val contentDescriptor: String = "",
-    val contentCaller: String = ""
+    val contentCaller: String = "",
+    /**
+     * 标题栏入口是否可用
+     *
+     * 1.5.1.1 起标题栏是**可选组**：结构发现失败时面板照常注入，只是没有顶栏按钮。
+     * 版本表登记的目标一律为 true。
+     */
+    val titlebarAvailable: Boolean = true,
+    /** 可选组降级原因（写进 hook-diag / 信息页 / 诊断报告，不参与任何判定） */
+    val warnings: List<String> = ArrayList()
 ) {
     companion object {
 

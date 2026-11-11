@@ -60,6 +60,19 @@ object OverlayInjection {
     @Volatile
     private var materialHandle: HookHandle? = null
 
+    /**
+     * 本次安装的全部句柄（1.5.1.1）
+     *
+     * 面板 / 材质 / 导航 / 顶栏 全部挂在这里：只有 close 成功才算释放，
+     * 失败时阻止下一次安装并在信息页提示重启。
+     */
+    @Volatile
+    private var installation: com.spwmods.waerwak.listenstats.ui.HostHookInstallation? = null
+
+    /** 上一轮释放不完整：宿主里还留着 hook，重启前不允许再装 */
+    @Volatile
+    private var blockedRollback: Throwable? = null
+
     /** 面板开关状态（提到 object 级，快捷键才能切换） */
     val panelOpen = mutableStateOf(false)
 
@@ -291,7 +304,12 @@ object OverlayInjection {
 
     @Synchronized
     fun install(): String {
-        if (handle != null) return "已注册（无需重复）"
+        if (installation != null) return "已注册（无需重复）"
+        val blocked = blockedRollback
+        if (blocked != null) {
+            lastError = "上一轮界面注入未能完全释放，请重启 SPW 后再启用"
+            return "失败：" + lastError
+        }
         if (!WorkshopApi.manager.isPermissionGranted(PluginPermission.CLASS_TRANSFORM)) {
             lastError = "未授予 CLASS_TRANSFORM"
             return "失败：未授予 CLASS_TRANSFORM 权限"
@@ -319,18 +337,25 @@ object OverlayInjection {
                 "  caption=" + uiTargets.debugCaption +
                 (if (resolved.detail.isEmpty()) "" else "  " + resolved.detail)
         )
+        val handles = com.spwmods.waerwak.listenstats.ui.HookHandles()
         return try {
             // 首选：包住宿主 Layer（不与其它插件抢 AppNavigation 的替换点）
             val layerInstalled = if (USE_LAYER_INJECTION) installLayerIfPossible(resolved.layer) else false
+            if (layerInstalled) {
+                val layerHandle = handle
+                if (layerHandle != null) handles += layerHandle
+            }
             if (!layerInstalled) {
                 // 回退路径：afterComposable 装面板 + replaceComposable 装材质层
-                handle = WorkshopApi.hookRegistrar.afterComposable(
+                val overlayHandle = WorkshopApi.hookRegistrar.afterComposable(
                     className = TARGET_CLASS,
                     methodName = TARGET_METHOD,
                     inClass = uiTargets.pageCaller
                 ) { _: UiHookCall ->
                     OverlayHost()
                 }
+                handle = overlayHandle
+                handles += overlayHandle
                 // 背景材质桥接层（可选）：优先替换 AppNavigation **内部**的宿主内容调用，
                 // 这样不会被其它插件（如 SPW-Lyrics，priority 80）抢占同一替换点；
                 // 找不到内层点时回退旧做法（替换 AppNavigation 调用）。
@@ -339,7 +364,7 @@ object OverlayInjection {
                 if (innerSite != null) {
                     try {
                         val innerMethod = com.spwmods.waerwak.listenstats.ui.resolveComposableMethod(innerSite)
-                        materialHandle = WorkshopApi.hookRegistrar.replaceComposable(
+                        val innerHandle = WorkshopApi.hookRegistrar.replaceComposable(
                             className = innerSite.target.dottedOwner(),
                             methodName = innerSite.target.name,
                             inClass = innerSite.caller.replace('/', '.'),
@@ -350,6 +375,8 @@ object OverlayInjection {
                         ) { call: UiHookCall ->
                             com.spwmods.waerwak.listenstats.ui.HostInnerMaterialStage(call, innerMethod)
                         }
+                        materialHandle = innerHandle
+                        handles += innerHandle
                         writeDiag(
                             "material",
                             "inner  " + innerSite.target.owner + "#" + innerSite.target.name +
@@ -365,13 +392,15 @@ object OverlayInjection {
                 }
                 if (materialHandle == null) {
                     try {
-                        materialHandle = WorkshopApi.hookRegistrar.replaceComposable(
+                        val fallbackHandle = WorkshopApi.hookRegistrar.replaceComposable(
                             className = TARGET_CLASS,
                             methodName = TARGET_METHOD,
                             inClass = uiTargets.pageCaller
                         ) { _: UiHookCall ->
                             com.spwmods.waerwak.listenstats.ui.HostMaterialLayer()
                         }
+                        materialHandle = fallbackHandle
+                        handles += fallbackHandle
                         writeDiag("material", "appnav（内层点不可用，回退旧点位）")
                     } catch (t: Throwable) {
                         System.err.println("[listen-stats] 材质桥接层注册失败（降级为不透明背景）: " + t.message)
@@ -385,8 +414,10 @@ object OverlayInjection {
             fontExtraPercent.value = UiStateStore.loadFontExtraPercent()
             entryEnabled.value = UiStateStore.loadEntryEnabled()
             hmsRanking.value = UiStateStore.loadDurationHmsRanking()
-            // 导航感知：切页时关面板，返回键优先关弹层/面板（失败不影响主功能）
-            com.spwmods.waerwak.listenstats.ui.NavigationHook.install(
+            // 导航感知：切页时关面板，返回键优先关弹层/面板（可选组，失败只降级）
+            var navError: String? = null
+            try {
+                val navHandle = com.spwmods.waerwak.listenstats.ui.NavigationHook.install(
                 onPageChange = {
                     forwardRestorePending = false
                     if (panelOpen.value) closePanel()
@@ -415,52 +446,102 @@ object OverlayInjection {
                         false
                     }
                 }
-            )
-            // 标题栏入口（失败静默降级，浮钮仍在）
-            com.spwmods.waerwak.listenstats.ui.TitlebarButton.install(uiTargets)
+                )
+                if (navHandle != null) {
+                    handles += navHandle
+                } else {
+                    navError = com.spwmods.waerwak.listenstats.ui.NavigationHook.lastError
+                }
+            } catch (t: Throwable) {
+                if (com.spwmods.waerwak.listenstats.ui.HookFailurePolicy.noRetry(t)) throw t
+                if (t is com.spwmods.waerwak.listenstats.ui.HookRegistrationFailure) {
+                    if (!t.rollbackComplete) throw t
+                    navError = t.message
+                } else {
+                    navError = t.javaClass.simpleName + "：" + (t.message ?: "")
+                }
+            }
+            // 标题栏入口（可选组：结构发现失败/注册失败都只降级，浮钮仍在）
+            var titlebarError: String? = null
+            try {
+                val titlebarHandle = com.spwmods.waerwak.listenstats.ui.TitlebarButton.register(uiTargets)
+                if (titlebarHandle != null) {
+                    handles += titlebarHandle
+                } else {
+                    titlebarError = com.spwmods.waerwak.listenstats.ui.TitlebarButton.lastError
+                }
+            } catch (t: Throwable) {
+                if (com.spwmods.waerwak.listenstats.ui.HookFailurePolicy.noRetry(t)) throw t
+                if (t is com.spwmods.waerwak.listenstats.ui.HookRegistrationFailure) {
+                    if (!t.rollbackComplete) throw t
+                    titlebarError = t.message
+                } else {
+                    titlebarError = t.javaClass.simpleName + "：" + (t.message ?: "")
+                }
+            }
             lastError = null
-            // 子项失败不影响主流程，但要在信息页诊断里能看到（不写日志文件）
-            val titlebarError = com.spwmods.waerwak.listenstats.ui.TitlebarButton.lastError
-            val navError = com.spwmods.waerwak.listenstats.ui.NavigationHook.lastError
-            if (titlebarError != null || navError != null) {
-                writeDiag("install-partial", "titlebar=" + (titlebarError ?: "-") + " nav=" + (navError ?: "-"))
+            val warnings = uiTargets.warnings
+            if (titlebarError != null || navError != null || warnings.isNotEmpty()) {
+                writeDiag(
+                    "install-partial",
+                    "titlebar=" + (titlebarError ?: "-") +
+                        " nav=" + (navError ?: "-") +
+                        " warnings=" + warnings.size +
+                        (if (warnings.isEmpty()) "" else " " + warnings)
+                )
             }
             writeDiag(
                 "install",
-                "ok handle=true layer=" + layerInstalled +
+                "ok handles=" + handles.size +
+                    " layer=" + layerInstalled +
+                    " material=" + (materialHandle != null) +
                     " nav=" + (navError == null) +
                     " titlebar=" + (titlebarError == null) +
-                    " titlebarErr=" + (titlebarError ?: "-")
+                    " titlebarErr=" + (titlebarError ?: "-") +
+                    " warnings=" + warnings.size
             )
+            val complete = navError == null && titlebarError == null &&
+                materialHandle != null && warnings.isEmpty()
+            var box: com.spwmods.waerwak.listenstats.ui.HostHookInstallation? = null
+            val session = com.spwmods.waerwak.listenstats.ui.HostHookInstallation(
+                handles,
+                complete,
+                onClosed = { failure ->
+                    if (installation === box) installation = null
+                    handle = null
+                    materialHandle = null
+                    com.spwmods.waerwak.listenstats.ui.HostMaterialState.bridgeAvailable = false
+                    com.spwmods.waerwak.listenstats.ui.HostMaterialState.hidden = false
+                    com.spwmods.waerwak.listenstats.ui.HostMaterialState.layerMode = false
+                    if (failure != null) {
+                        // 释放不完整：保留阻断状态，下一次 install 会直接拒绝
+                        blockedRollback = failure
+                        System.err.println("[listen-stats] 释放界面 hook 失败（需重启 SPW）: " + failure.message)
+                    }
+                }
+            )
+            box = session
+            installation = session
             "已注册：窗口右下角会出现一个「只露一点」的圆"
         } catch (t: Throwable) {
-            // 回滚：handle 已赋值时如果只记录错误，installed() 会一直是 true，
-            // 之后 install() 直接返回「已注册」，导航感知 / 标题栏按钮再也补装不上
-            lastError = "${t.javaClass.simpleName}: ${t.message}"
-            try {
-                handle?.unhook()
-            } catch (e: Throwable) {
-                // 忽略
-            }
+            // 中止：尽力回滚；回滚不完整时保留原因，重启前不再尝试安装
+            val failure = handles.registrationFailed(t)
             handle = null
-            try {
-                materialHandle?.unhook()
-            } catch (e: Throwable) {
-                // 忽略
-            }
             materialHandle = null
-            try {
-                com.spwmods.waerwak.listenstats.ui.NavigationHook.uninstall()
-            } catch (e: Throwable) {
-                // 忽略
+            installation = null
+            lastError = t.javaClass.simpleName + ": " + (t.message ?: "")
+            writeDiag(
+                "install",
+                "failed " + t.javaClass.simpleName + ": " + t.message +
+                    " rollbackComplete=" + failure.rollbackComplete
+            )
+            if (!failure.rollbackComplete) {
+                blockedRollback = failure
+                lastError = "界面注入失败且未能完全回滚，请重启 SPW 后再启用"
+                "失败：界面注入未能完全回滚，请重启 SPW 后再启用"
+            } else {
+                "失败：${t.javaClass.simpleName} — ${t.message ?: ""}"
             }
-            try {
-                com.spwmods.waerwak.listenstats.ui.TitlebarButton.uninstall()
-            } catch (e: Throwable) {
-                // 忽略
-            }
-            writeDiag("install", "failed " + t.javaClass.simpleName + ": " + t.message)
-            "失败：${t.javaClass.simpleName} — ${t.message ?: ""}"
         }
     }
 
@@ -483,33 +564,40 @@ object OverlayInjection {
         thread.start()
     }
 
+    /**
+     * 卸载全部界面 hook
+     *
+     * 1.5.1.1 起只通过 [HostHookInstallation] 逆序关闭：单个句柄失败不会被当成成功，
+     * 残留会被保留并阻止下一次安装（因为无法确认宿主里到底还剩几个）。
+     */
     @Synchronized
     fun uninstall() {
-        try {
-            com.spwmods.waerwak.listenstats.ui.NavigationHook.uninstall()
-        } catch (t: Throwable) {
-            System.err.println("[listen-stats] 卸载导航 hook 失败: ${t.message}")
+        val current = installation
+        installation = null
+        if (current != null) {
+            try {
+                current.close()
+            } catch (t: Throwable) {
+                blockedRollback = t
+                writeDiag("install", "release-failed " + t.javaClass.simpleName + ": " + t.message)
+                System.err.println("[listen-stats] 卸载界面 hook 失败（需重启 SPW）: " + t.message)
+            }
         }
-        try {
-            com.spwmods.waerwak.listenstats.ui.TitlebarButton.uninstall()
-        } catch (t: Throwable) {
-            System.err.println("[listen-stats] 卸载标题栏按钮失败: ${t.message}")
+        // 兜底：只在没有完整安装对象时才会走到这里（半截安装 / 旧路径）
+        val overlay = handle
+        if (current == null && overlay != null) {
+            try {
+                overlay.unhook()
+            } catch (t: Throwable) {
+                blockedRollback = t
+                System.err.println("[listen-stats] 卸载 Overlay 失败（需重启 SPW）: " + t.message)
+            }
         }
-        try {
-            materialHandle?.unhook()
-        } catch (t: Throwable) {
-            System.err.println("[listen-stats] 卸载材质桥接层失败: ${t.message}")
-        }
+        handle = null
         materialHandle = null
         com.spwmods.waerwak.listenstats.ui.HostMaterialState.bridgeAvailable = false
         com.spwmods.waerwak.listenstats.ui.HostMaterialState.hidden = false
         com.spwmods.waerwak.listenstats.ui.HostMaterialState.layerMode = false
-        try {
-            handle?.unhook()
-        } catch (t: Throwable) {
-            System.err.println("[listen-stats] 卸载 Overlay 失败: ${t.message}")
-        }
-        handle = null
     }
 
     private fun toast(text: String, ok: Boolean) {

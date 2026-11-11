@@ -29,7 +29,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.spwmods.waerwak.listenstats.OverlayInjection
 import com.xuncorp.spw.workshop.api.WorkshopApi
-import com.xuncorp.spw.workshop.api.hook.HookHandle
 
 /**
  * 标题栏入口
@@ -52,14 +51,16 @@ object TitlebarButton {
     @Volatile
     private var targets: HostUiTargets? = null
 
-    private var handle: HookHandle? = null
+    /** 当前安装句柄（由调用方的 HookHandles 持有；释放成功才清空） */
+    @Volatile
+    private var installation: AutoCloseable? = null
 
     @Volatile
     var lastError: String? = null
         private set
 
     val installed: Boolean
-        get() = handle != null
+        get() = installation != null
 
     fun statusText(): String {
         if (installed) return "已安装（标题栏 Quick 左侧）"
@@ -105,13 +106,27 @@ object TitlebarButton {
         return m
     }
 
-    fun install(t: HostUiTargets): Boolean {
-        if (handle != null) return true
+    /**
+     * 安装标题栏入口
+     *
+     * 标题栏是可选组：结构发现失败（[HostUiTargets.titlebarAvailable] = false）时直接返回 null，
+     * 面板与浮钮照常工作，`lastError` 里留下降级原因。
+     *
+     * @return 句柄（已安装过时返回同一个）；不可用时返回 null
+     */
+    @Synchronized
+    fun register(t: HostUiTargets): AutoCloseable? {
+        val existing = installation
+        if (existing != null) return existing
+        if (!t.titlebarAvailable) {
+            lastError = "标题栏结构发现失败（可选组降级）"
+            return null
+        }
         targets = t
-        return try {
+        val hookHandle = try {
             // 复用宿主组件时提前解析签名：不支持就尽早失败，不影响主统计 hook
             if (t.reuseHostCaption) captionMethodOf(t.captionClass, t.captionMethodName)
-            handle = WorkshopApi.hookRegistrar.afterComposable(
+            WorkshopApi.hookRegistrar.afterComposable(
                 className = t.debugCaption,
                 methodName = t.debugCaptionMethod,
                 inClass = t.titlebarCaller,
@@ -119,22 +134,29 @@ object TitlebarButton {
             ) { _ ->
                 TitlebarEntry()
             }
-            lastError = null
-            true
         } catch (e: Throwable) {
             lastError = e.javaClass.simpleName + "：" + (e.message ?: "")
-            handle = null
-            false
+            return null
         }
+        lastError = null
+        var box: AutoCloseable? = null
+        val session = AutoCloseable {
+            // 释放失败直接抛给 HookHandles：句柄会被保留，调用方据此拒绝再装
+            hookHandle.unhook()
+            if (installation === box) installation = null
+        }
+        box = session
+        installation = session
+        return session
     }
 
+    /** 兼容旧调用：返回是否安装成功 */
+    fun install(t: HostUiTargets): Boolean = register(t) != null
+
     fun uninstall() {
-        try {
-            handle?.unhook()
-        } catch (t: Throwable) {
-            // 卸载失败忽略
-        }
-        handle = null
+        val current = installation
+        installation = null
+        if (current != null) current.close()
     }
 
     @Composable

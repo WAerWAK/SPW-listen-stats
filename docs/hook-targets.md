@@ -3,10 +3,20 @@
 宿主每次更新都会重排混淆名（连 patch 版本也会变）。1.5.0 起不再依赖"版本 → 硬编码类名"，
 而是**从宿主字节码按结构发现**，失败时才回退到版本表，都失败就不注入（采集照常）。
 
-- 代码：`"ui/discovery/"` 下的 `"HostBytecodeIndex"` / `"HostUiDiscovery"` / `"HostTargetResolver"`；版本表在 `"ui/HostUiTargets.kt"`
+- 代码：`"ui/discovery/"` 下的 `"HostBytecodeIndex"` / `"HostUiDiscovery"` / `"HostTargetResolver"`；版本表在 `"ui/HostUiTargets.kt"`；句柄所有权在 `"ui/HookHandles.kt"`
 - 依赖：宿主自带的 `net.bytebuddy.jar.asm`（不打包、不需要新增依赖）
-- 缓存：数据目录 `"host-targets.txt"`，key = 宿主 jar 绝对路径 + SHA-256 + 插件版本
-- 诊断：数据目录 `hook-diag.txt`，每次注入写 `resolve source=scan|cache|table` 与 `install ok layer=…`
+- 缓存：数据目录 `"host-targets.txt"`，key = 宿主 jar 绝对路径 + SHA-256 + 插件版本，`format=3`
+- 诊断：数据目录 `hook-diag.txt`，每次注入写 `resolve source=scan|cache|table`、`install ok handles=N …warnings=N`
+
+## 0. 句柄所有权与可选组（1.5.1.1 起）
+
+- **只有 close 成功才算释放**：`HookHandles` 逆序关闭，失败的句柄留在集合里；`HookRegistrationFailure.rollbackComplete=false`
+  时调用方在信息页/日志提示“重启 SPW 后再启用”，并阻止再次注册（同一 call site 重复注册不会报错，只会叠渲染）。
+- **可选组降级**：结构发现里只有面板（AppNavigation 调用点）是必需项；标题栏与内层材质点失败只写 `warnings`，
+  面板/浮钮照常注入。`HostUiTargets.titlebarAvailable=false` 时 `TitlebarButton.register()` 直接返回 null。
+- **不重试的情形**：权限不足/被收回、线程中断、任务取消（`HookFailurePolicy.noRetry`），避免反复扫码。
+- 缓存格式 3 修正了两个 1.5.1 的解析 bug（导致缓存一直不命中、命中后又丢内层点位）：
+  `caption.control` 行只有 3 段；`layer/content` 行是 4 段（旧代码分别要求 4/5 段）。
 
 ## 1. 结构判据（自动发现规则）
 
@@ -33,10 +43,11 @@
 | 材质 Layer | `androidx.compose.ui.ՙ.Ϳ(Modifier,Z,Function3,Composer,II)V`（`\u0559`），caller = 面板调用点（**已实现但默认关闭**，见下） |
 | 导航 hook | `Navigator` / `navigate` / `replace` / `forward` / `back` 未变 |
 
-`hook-diag.txt` 成功样本：
+`hook-diag.txt` 成功样本（1.5.1.1 起多了 `handles` / `material` / `warnings`）：
 
-    resolve  source=scan  page=androidx.compose.ui.Ɏ  titlebar=androidx.compose.ui.ઈ  caption=androidx.compose.ui.ݕ  classes=69704 path=…\ffmpeg-x64.dll
-    install  ok handle=true layer=true nav=true titlebar=true titlebarErr=-
+    resolve  source=cache  page=androidx.compose.ui.Ɏ  titlebar=androidx.compose.ui.ઈ  caption=androidx.compose.ui.ݕ  …\ffmpeg-x64.dll
+    material  inner  androidx/compose/animation/SharedTransitionScopeKt#SharedTransitionLayout @ com/xuncorp/voxzen/ui/navigation/AppNavigationKt
+    install  ok handles=4 layer=false material=true nav=true titlebar=true titlebarErr=- warnings=0
 
 > **Layer 点位为什么默认关闭**：包住宿主 Layer 后，我们的面板会被放到窗口原点（盖住顶栏），
 > 且隐藏宿主内容会连侧栏/顶栏一起隐藏；旧点位（替换 `AppNavigation` 调用点）才能让面板落在内容区。

@@ -6,14 +6,15 @@ import com.spwmods.waerwak.listenstats.ui.HostUiTargets
  * 从宿主字节码里按**结构**找出 UI 注入点（不依赖混淆名）
  *
  * 判据全部是"调用关系 + 描述符 + 唯一性"，不是类名：
- * 1. 面板：调用了 `AppNavigationKt.AppNavigation(Composer, int)` 的唯一外部类，且该类里只有 1 处调用点。
- * 2. 标题栏：宿主 caption button 组件 = 值类型 10 参静态 composable（内部再调 9 参重载）；
+ * 1. 面板（**必需**）：调用了 `AppNavigationKt.AppNavigation(Composer, int)` 的唯一外部类，且该类里只有 1 处调用点。
+ * 2. 标题栏（**可选**）：宿主 caption button 组件 = 值类型 10 参静态 composable（内部再调 9 参重载）；
  *    它被标题栏里某个零参 composable 调用，那个 composable 的调用类就是标题栏行；
  *    行里排在它前一个的零参 composable，就是我们要 hook 的 DebugCaptionButton 模板。
- * 3. 材质层（留给 B2）：面板调用类里那处 `(Modifier, Z, Function3, Composer, II)` 调用，
+ * 3. 材质层（**可选**）：面板调用类里那处 `(Modifier, Z, Function3, Composer, II)` 调用，
  *    且其方法体里再次调用同描述符并调用 DrawModifierKt。
  *
- * 任何一步不唯一都直接失败（宁可报错也不猜），由上层回退到版本表。
+ * 1.5.1.1 起只有面板判据是必需的：标题栏/材质发现失败只降级（写进 warnings），
+ * 不再把整个注入一起拖垮。所有判据都不猜：不唯一就报错，由上层回退版本表。
  * 刻意不用 Kotlin inline 集合/作用域函数：本项目曾在 in-process 编译下被它们触发后端 codegen 崩溃。
  */
 data class HostLayerSite(val target: HostMethod, val caller: String)
@@ -57,39 +58,63 @@ object HostUiDiscovery {
         val pageCaller = uniquePageCaller(index, nav)
         checkPageSite(index, pageCaller, nav)
 
-        val control = findCaptionControl(index)
-        val entry = findCaptionEntry(index, control)
-        val rowOwner = uniqueCallerOf(index, entry)
-        val row = findRow(index, rowOwner, entry)
-        val entries = collectComposableEntries(index, row)
-        var position = -1
-        var i = 0
-        while (i < entries.size) {
-            if (entries[i] == entry) position = i
-            i++
-        }
-        check(position > 0) { "标题栏结构变化：找不到 DebugCaptionButton 的前一个 composable" }
-        val predecessor = entries[position - 1]
-        val predecessorCaller = uniqueCallerOf(index, predecessor)
-        check(predecessorCaller == rowOwner) {
-            "标题栏结构变化：DebugCaptionButton 模板的调用类不是标题栏行（" + predecessorCaller + " != " + rowOwner + "）"
+        val warnings = ArrayList<String>(2)
+        // 标题栏是可选组：失败只降级，不改 targets 之外的东西
+        var captionControl: HostMethod? = null
+        var captionTemplate: HostMethod? = null
+        var captionRowOwner: String? = null
+        try {
+            val control = findCaptionControl(index)
+            val entry = findCaptionEntry(index, control)
+            val rowOwner = uniqueCallerOf(index, entry)
+            val row = findRow(index, rowOwner, entry)
+            val entries = collectComposableEntries(index, row)
+            var position = -1
+            var i = 0
+            while (i < entries.size) {
+                if (entries[i] == entry) position = i
+                i++
+            }
+            check(position > 0) { "标题栏结构变化：找不到 DebugCaptionButton 的前一个 composable" }
+            val predecessor = entries[position - 1]
+            val predecessorCaller = uniqueCallerOf(index, predecessor)
+            check(predecessorCaller == rowOwner) {
+                "标题栏结构变化：DebugCaptionButton 模板的调用类不是标题栏行（" + predecessorCaller + " != " + rowOwner + "）"
+            }
+            captionControl = control
+            captionTemplate = predecessor
+            captionRowOwner = rowOwner
+        } catch (t: Exception) {
+            warnings.add("titlebar: " + (t.message ?: t.javaClass.simpleName))
+            captionControl = null
+            captionTemplate = null
+            captionRowOwner = null
         }
 
         val layer = findLayer(index, pageCaller)
         val content = findInnerMaterialSite(index)
+        if (content == null) {
+            warnings.add("material: 找不到内层材质点，背景将回退为不透明")
+        }
 
+        val control = captionControl
+        val template = captionTemplate
+        val rowOwner = captionRowOwner
+        val titlebarAvailable = control != null && template != null && rowOwner != null
         val targets = HostUiTargets(
             pageCaller = pageCaller.replace('/', '.'),
-            titlebarCaller = rowOwner.replace('/', '.'),
-            debugCaption = predecessor.owner.replace('/', '.'),
-            reuseHostCaption = true,
-            captionClass = control.owner.replace('/', '.'),
-            debugCaptionMethod = predecessor.name,
-            captionMethodName = control.name,
+            titlebarCaller = if (titlebarAvailable) rowOwner!!.replace('/', '.') else "",
+            debugCaption = if (titlebarAvailable) template!!.owner.replace('/', '.') else "",
+            reuseHostCaption = titlebarAvailable,
+            captionClass = if (titlebarAvailable) control!!.owner.replace('/', '.') else "",
+            debugCaptionMethod = if (titlebarAvailable) template!!.name else "",
+            captionMethodName = if (titlebarAvailable) control!!.name else "",
             contentOwner = if (content == null) "" else content.target.owner.replace('/', '.'),
             contentMethod = if (content == null) "" else content.target.name,
             contentDescriptor = if (content == null) "" else content.target.descriptor,
-            contentCaller = if (content == null) "" else content.caller.replace('/', '.')
+            contentCaller = if (content == null) "" else content.caller.replace('/', '.'),
+            titlebarAvailable = titlebarAvailable,
+            warnings = warnings
         )
         return DiscoveredUiTargets(targets, layer, content)
     }

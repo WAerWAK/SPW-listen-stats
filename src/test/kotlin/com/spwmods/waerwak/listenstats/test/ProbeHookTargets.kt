@@ -35,6 +35,18 @@ fun main(args: Array<String>) {
         println("  titlebarCaller  = " + t.titlebarCaller)
         println("  debugCaption    = " + t.debugCaption + "  (method " + t.debugCaptionMethod + ")")
         println("  captionClass    = " + t.captionClass + "  (method " + t.captionMethodName + ")")
+        // 1.5.1.1：标题栏/材质是可选组，降级不能当失败，但必须打印出来
+        if (t.titlebarAvailable) {
+            println("  titlebar        = 可用")
+        } else {
+            failures++
+            println("  FAIL titlebar    = 结构发现失败（面板仍可注入，但顶栏入口不可用）")
+        }
+        var w = 0
+        while (w < t.warnings.size) {
+            println("  warning         = " + t.warnings[w])
+            w++
+        }
         val layer = discovered.layer
         if (layer == null) {
             println("  layer           = （未发现，材质将回退旧点位）")
@@ -48,10 +60,13 @@ fun main(args: Array<String>) {
                 println("版本表没有 " + goldenVersion + " 的登记值，跳过对比")
             } else {
                 if (t.pageCaller != golden.pageCaller) { failures++; println("  FAIL pageCaller 与版本表不一致：" + golden.pageCaller) }
-                if (t.titlebarCaller != golden.titlebarCaller) { failures++; println("  FAIL titlebarCaller 与版本表不一致：" + golden.titlebarCaller) }
-                if (t.debugCaption != golden.debugCaption) { failures++; println("  FAIL debugCaption 与版本表不一致：" + golden.debugCaption) }
-                if (t.captionClass != golden.captionClass) { failures++; println("  FAIL captionClass 与版本表不一致：" + golden.captionClass) }
-                if (t.debugCaptionMethod != golden.debugCaptionMethod) { failures++; println("  FAIL debugCaptionMethod 与版本表不一致：" + golden.debugCaptionMethod) }
+                // 标题栏降级时已单独计过失败，这里不再重复比对
+                if (t.titlebarAvailable) {
+                    if (t.titlebarCaller != golden.titlebarCaller) { failures++; println("  FAIL titlebarCaller 与版本表不一致：" + golden.titlebarCaller) }
+                    if (t.debugCaption != golden.debugCaption) { failures++; println("  FAIL debugCaption 与版本表不一致：" + golden.debugCaption) }
+                    if (t.captionClass != golden.captionClass) { failures++; println("  FAIL captionClass 与版本表不一致：" + golden.captionClass) }
+                    if (t.debugCaptionMethod != golden.debugCaptionMethod) { failures++; println("  FAIL debugCaptionMethod 与版本表不一致：" + golden.debugCaptionMethod) }
+                }
                 if (failures == 0) println("与版本表 " + goldenVersion + " 的登记值一致")
             }
         }
