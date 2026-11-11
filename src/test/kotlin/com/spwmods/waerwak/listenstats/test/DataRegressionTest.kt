@@ -15,12 +15,15 @@ import com.spwmods.waerwak.listenstats.stats.TrackResolver
 import com.spwmods.waerwak.listenstats.ui.HostUiTargets
 import com.spwmods.waerwak.listenstats.ui.HookFailurePolicy
 import com.spwmods.waerwak.listenstats.ui.HookHandles
+import com.spwmods.waerwak.listenstats.ui.HostInstallSession
 import com.spwmods.waerwak.listenstats.ui.discovery.HostBytecodeIndex
 import com.spwmods.waerwak.listenstats.ui.discovery.HostField
+import com.spwmods.waerwak.listenstats.ui.discovery.HostLayerSite
 import com.spwmods.waerwak.listenstats.ui.discovery.HostMethod
 import com.spwmods.waerwak.listenstats.ui.discovery.HostMethodBody
 import com.spwmods.waerwak.listenstats.ui.discovery.HostTargetResolver
 import com.spwmods.waerwak.listenstats.ui.discovery.HostUiDiscovery
+import com.spwmods.waerwak.listenstats.ui.discovery.ResolvedHostTargets
 import com.xuncorp.spw.workshop.api.PlaybackExtensionPoint
 import java.io.File
 import java.time.ZoneId
@@ -503,6 +506,10 @@ fun main() {
         playFor(item, 0L, 40 * SECOND)
         SessionTracker.flush()
 
+        // record 是异步落盘的：模拟重启前必须等写队列把字典刷出去，
+        // 否则偶尔会在文件还没写完时就清内存（本用例曾因此偶发失败）
+        Thread.sleep(400L)
+
         // 模拟重启：清内存后从磁盘重建
         StatsStore.resetForTesting(dir)
         StatsStore.dataDirOrNull()
@@ -823,6 +830,72 @@ fun main() {
         check(read.targets.titlebarCaller == "row.caller", "titlebarCaller 应为点分：" + read.targets.titlebarCaller)
         check(read.targets.captionClass == "control.owner", "captionClass 不一致：" + read.targets.captionClass)
         check(read.targets.captionMethodName == "controlMethod", "captionMethodName 不一致")
+    }
+
+    test("注入会话代数：停用后旧代号作废") {
+        val first = HostInstallSession.begin()
+        check(HostInstallSession.isCurrent(first), "新会话应有效")
+        HostInstallSession.stop()
+        check(!HostInstallSession.isCurrent(first), "停用后旧代号应作废")
+        val second = HostInstallSession.begin()
+        check(HostInstallSession.isCurrent(second), "新代号应有效")
+        check(!HostInstallSession.isCurrent(first), "旧代号不能因为新会话开始而复活")
+    }
+
+    test("注入点缓存只由扫描写入，且 layer/content 能原样读回") {
+        val dir = File(
+            System.getProperty("java.io.tmpdir"),
+            "spw-listenstats-cache-write-" + System.nanoTime()
+        )
+        dir.mkdirs()
+        val layer = HostLayerSite(
+            HostMethod("layer/owner", "layerMethod", "(Landroidx/compose/ui/Modifier;Z)V"),
+            "layer/caller"
+        )
+        val content = HostLayerSite(
+            HostMethod(
+                "androidx/compose/animation/SharedTransitionScopeKt",
+                "SharedTransitionLayout",
+                "(Landroidx/compose/ui/Modifier;Lkotlin/jvm/functions/Function3;" +
+                    "Landroidx/compose/runtime/Composer;II)V"
+            ),
+            "com/xuncorp/voxzen/ui/navigation/AppNavigationKt"
+        )
+        val targets = HostUiTargets(
+            pageCaller = "page.caller",
+            titlebarCaller = "row.caller",
+            debugCaption = "entry.owner",
+            reuseHostCaption = true,
+            captionClass = "control.owner",
+            debugCaptionMethod = "entryMethod",
+            captionMethodName = "controlMethod"
+        )
+        val resolved = ResolvedHostTargets(
+            targets,
+            layer,
+            "scan",
+            "test",
+            content = content,
+            fromScan = true,
+            cacheKeyPath = "/host.jar",
+            cacheKeySha = "abc"
+        )
+        HostTargetResolver.saveCache("2.0.0", dir, resolved)
+        val read = HostTargetResolver.readCache(dir, "2.0.0", "/host.jar", "abc")
+        check(read != null, "saveCache 写的文件应能被 readCache 读回（写入/读取格式必须一致）")
+        check(read!!.layer != null, "layer 应能读回")
+        check(read.content != null, "content 应能读回")
+        check(read.targets.pageCaller == "page.caller", "pageCaller 不一致：" + read.targets.pageCaller)
+        check(read.targets.captionClass == "control.owner", "captionClass 不一致")
+
+        // 非扫描来源（缓存/版本表）不得写盘
+        val dir2 = File(
+            System.getProperty("java.io.tmpdir"),
+            "spw-listenstats-cache-skip-" + System.nanoTime()
+        )
+        dir2.mkdirs()
+        HostTargetResolver.saveCache("2.0.0", dir2, resolved.copy(fromScan = false))
+        check(!File(dir2, "host-targets.txt").isFile, "非扫描结果不应写缓存")
     }
 
     test("位置粒度粗于回调频率时不少记") {

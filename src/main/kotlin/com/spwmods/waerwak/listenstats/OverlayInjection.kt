@@ -73,6 +73,9 @@ object OverlayInjection {
     @Volatile
     private var blockedRollback: Throwable? = null
 
+    @Volatile
+    private var installing = false
+
     /** 面板开关状态（提到 object 级，快捷键才能切换） */
     val panelOpen = mutableStateOf(false)
 
@@ -302,8 +305,17 @@ object OverlayInjection {
         }
     }
 
-    @Synchronized
-    fun install(): String {
+    /**
+     * 执行一次界面注入（已被调度到宿主界面线程）
+     *
+     * 会话代号在扫描前后各校验一次：宿主停用插件时走的是后台 FutureTask
+     * （SPW 1.19.3 只等 3 秒），扫描要 1.5 秒左右，停用可能正好发生在中间。
+     */
+    private fun installSession(session: Long): String {
+        if (!com.spwmods.waerwak.listenstats.ui.HostInstallSession.isCurrent(session)) {
+            writeDiag("install", "cancelled session=" + session + "（插件已停用，放弃本次注册）")
+            return "已取消：插件已停用"
+        }
         if (installation != null) return "已注册（无需重复）"
         val blocked = blockedRollback
         if (blocked != null) {
@@ -312,19 +324,44 @@ object OverlayInjection {
         }
         if (!WorkshopApi.manager.isPermissionGranted(PluginPermission.CLASS_TRANSFORM)) {
             lastError = "未授予 CLASS_TRANSFORM"
+            writeDiag("install", "no-permission session=" + session)
             return "失败：未授予 CLASS_TRANSFORM 权限"
         }
+        val startedAt = System.nanoTime()
         // 注入目标：缓存 → 结构化发现（宿主字节码）→ 版本表回退；都失败就不猜，明确报错
         val hostVer = hostVersion()
-        val resolved = com.spwmods.waerwak.listenstats.ui.discovery.HostTargetResolver.resolve(
-            pluginVersion = HostProbe.pluginContext()?.pluginVersion ?: "?",
+        val pluginVersion = HostProbe.pluginContext()?.pluginVersion ?: "?"
+        var ignoreCache = false
+        var resolved = com.spwmods.waerwak.listenstats.ui.discovery.HostTargetResolver.resolve(
+            pluginVersion = pluginVersion,
             hostVersion = hostVer,
-            cacheDir = StatsStore.dataDirOrNull()
+            cacheDir = StatsStore.dataDirOrNull(),
+            ignoreCache = ignoreCache
         )
+        // 缓存命中也要先确认反射能真的拿到目标（宿主重排后描述符可能还在但签名已变），
+        // 预检失败就丢掉缓存全扫一次（只重试一次）。
+        if (resolved != null && resolved.source == "cache") {
+            val problem = cachePreflight(resolved.targets)
+            if (problem != null) {
+                writeDiag("install", "cache-preflight-failed " + problem + "，改为全扫描")
+                ignoreCache = true
+                com.spwmods.waerwak.listenstats.ui.discovery.HostTargetResolver.forget()
+                resolved = com.spwmods.waerwak.listenstats.ui.discovery.HostTargetResolver.resolve(
+                    pluginVersion = pluginVersion,
+                    hostVersion = hostVer,
+                    cacheDir = StatsStore.dataDirOrNull(),
+                    ignoreCache = true
+                )
+            }
+        }
+        if (!com.spwmods.waerwak.listenstats.ui.HostInstallSession.isCurrent(session)) {
+            writeDiag("install", "cancelled session=" + session + "（发现期间插件被停用）")
+            return "已取消：插件已停用"
+        }
         if (resolved == null) {
             val shown = if (hostVer.isEmpty()) "未知" else hostVer
             lastError = "无法识别宿主界面（" + shown + "）"
-            writeDiag("install", "no-target host=" + shown + "  skip-ui-injection（采集不受影响）")
+            writeDiag("install", "no-target host=" + shown + "  session=" + session + "  skip-ui-injection（采集不受影响）")
             return "无法识别宿主界面（" + shown + "）：面板与顶栏入口暂不可用，听歌数据仍会正常记录"
         }
         val uiTargets = resolved.targets
@@ -332,6 +369,7 @@ object OverlayInjection {
         writeDiag(
             "resolve",
             "source=" + resolved.source +
+                "  session=" + session +
                 "  page=" + uiTargets.pageCaller +
                 "  titlebar=" + uiTargets.titlebarCaller +
                 "  caption=" + uiTargets.debugCaption +
@@ -492,18 +530,33 @@ object OverlayInjection {
             }
             writeDiag(
                 "install",
-                "ok handles=" + handles.size +
+                "ok session=" + session +
+                    " handles=" + handles.size +
                     " layer=" + layerInstalled +
                     " material=" + (materialHandle != null) +
                     " nav=" + (navError == null) +
                     " titlebar=" + (titlebarError == null) +
                     " titlebarErr=" + (titlebarError ?: "-") +
-                    " warnings=" + warnings.size
+                    " warnings=" + warnings.size +
+                    " via=" + resolved.source +
+                    " ms=" + ((System.nanoTime() - startedAt) / 1_000_000L)
             )
             val complete = navError == null && titlebarError == null &&
                 materialHandle != null && warnings.isEmpty()
+            // 只有“完整安装”才把描述串写盘：否则下次启动会命中一份不完整的目标
+            if (complete && resolved.fromScan) {
+                try {
+                    com.spwmods.waerwak.listenstats.ui.discovery.HostTargetResolver.saveCache(
+                        pluginVersion,
+                        StatsStore.dataDirOrNull(),
+                        resolved
+                    )
+                } catch (t: Throwable) {
+                    writeDiag("install", "cache-write-skipped " + t.javaClass.simpleName + ": " + t.message)
+                }
+            }
             var box: com.spwmods.waerwak.listenstats.ui.HostHookInstallation? = null
-            val session = com.spwmods.waerwak.listenstats.ui.HostHookInstallation(
+            val installed = com.spwmods.waerwak.listenstats.ui.HostHookInstallation(
                 handles,
                 complete,
                 onClosed = { failure ->
@@ -520,8 +573,8 @@ object OverlayInjection {
                     }
                 }
             )
-            box = session
-            installation = session
+            box = installed
+            installation = installed
             "已注册：窗口右下角会出现一个「只露一点」的圆"
         } catch (t: Throwable) {
             // 中止：尽力回滚；回滚不完整时保留原因，重启前不再尝试安装
@@ -546,12 +599,128 @@ object OverlayInjection {
     }
 
     /**
+     * 安装界面注入（对外唯一入口）
+     *
+     * - 扫描/发现仍在调用线程（通常是后台线程）完成，不阻塞宿主启动
+     * - **注册与释放统一在宿主界面线程（AWT EDT）执行**：字节码插桩与 Compose 组合
+     *   都归宿主界面线程管，跨线程注册是 1.5.1 遗留的隐患
+     * - 等待 EDT 最多 3 秒；超时放弃本次注册（宿主界面线程忙时不让插件拖住启动）
+     */
+    fun install(): String {
+        val blocked = blockedRollback
+        if (blocked != null) {
+            lastError = "上一轮界面注入未能完全释放，请重启 SPW 后再启用"
+            return "失败：" + lastError
+        }
+        val early = claimInstalling()
+        if (early != null) return early
+        val session = com.spwmods.waerwak.listenstats.ui.HostInstallSession.begin()
+        val outcome = InstallOutcome()
+        val task = object : Runnable {
+            override fun run() {
+                try {
+                    outcome.message = installSession(session)
+                } catch (t: Throwable) {
+                    outcome.failure = t
+                }
+            }
+        }
+        if (java.awt.EventQueue.isDispatchThread()) {
+            task.run()
+        } else {
+            val latch = java.util.concurrent.CountDownLatch(1)
+            java.awt.EventQueue.invokeLater(object : Runnable {
+                override fun run() {
+                    try {
+                        task.run()
+                    } finally {
+                        latch.countDown()
+                    }
+                }
+            })
+            val done = try {
+                latch.await(5, java.util.concurrent.TimeUnit.SECONDS)
+            } catch (t: InterruptedException) {
+                false
+            }
+            if (!done) {
+                releaseInstalling()
+                lastError = "宿主界面线程忙，本次界面注入已跳过"
+                writeDiag("install", "edt-timeout session=" + session)
+                return "失败：宿主界面线程忙，界面注入已跳过（不影响听歌记录）"
+            }
+        }
+        releaseInstalling()
+        val thrown = outcome.failure
+        if (thrown != null) {
+            lastError = thrown.javaClass.simpleName + ": " + (thrown.message ?: "")
+            writeDiag("install", "unexpected " + thrown.javaClass.simpleName + ": " + thrown.message)
+            return "失败：" + (thrown.message ?: thrown.javaClass.simpleName)
+        }
+        return outcome.message ?: "已注册"
+    }
+
+    @Synchronized
+    private fun claimInstalling(): String? {
+        if (installation != null) return "已注册（无需重复）"
+        if (installing) return "正在注册（请稍候）"
+        installing = true
+        return null
+    }
+
+    @Synchronized
+    private fun releaseInstalling() {
+        installing = false
+    }
+
+    @Synchronized
+    private fun takeInstallation(): com.spwmods.waerwak.listenstats.ui.HostHookInstallation? {
+        val owned = installation
+        installation = null
+        return owned
+    }
+
+    /**
+     * 缓存命中后的反射预检
+     *
+     * 注入点缓存只存描述串（类名/方法名/描述符），不保证反射一定拿得到：
+     * 宿主重排后可能某一行残留旧值。预检失败就丢掉缓存全扫一次。
+     */
+    private fun cachePreflight(targets: com.spwmods.waerwak.listenstats.ui.HostUiTargets): String? {
+        if (targets.titlebarAvailable) {
+            val error = com.spwmods.waerwak.listenstats.ui.TitlebarButton.preflight(targets)
+            if (error != null) return "caption: " + error
+        }
+        val site = innerMaterialSite(targets)
+        if (site != null) {
+            try {
+                com.spwmods.waerwak.listenstats.ui.resolveComposableMethod(site)
+            } catch (t: Throwable) {
+                return "material: " + (t.message ?: t.javaClass.simpleName)
+            }
+        }
+        return null
+    }
+
+    /**
      * 启动时后台安装
      *
      * 首次启用需要扫描宿主字节码（约 1~2 秒，之后走缓存），不能阻塞插件启动流程；
      * 扫描期间面板/顶栏入口要等它完成（通常宿主还在加载界面，用户感知不到）。
      */
+    /**
+     * 让在途的扫描/发现立即作废（停用第一步调用，句柄稍后再释放）
+     *
+     * 与 [uninstall] 分开：停用流程里先斩断“还要不要装”，再从容关句柄，
+     * 避免出现“停用超时 → 提示必须重启”的互等。
+     */
+    fun cancelPending() {
+        val session = com.spwmods.waerwak.listenstats.ui.HostInstallSession.stop()
+        writeDiag("install", "cancel-pending session=" + session)
+    }
+
     fun installAsync() {
+        writeDiag("install", "async-start")
         val thread = Thread({
             try {
                 val message = install()
@@ -567,21 +736,27 @@ object OverlayInjection {
     /**
      * 卸载全部界面 hook
      *
-     * 1.5.1.1 起只通过 [HostHookInstallation] 逆序关闭：单个句柄失败不会被当成成功，
-     * 残留会被保留并阻止下一次安装（因为无法确认宿主里到底还剩几个）。
+     * 1. 先让会话代号失效：在途的扫描/发现结果全部作废（不会再注册）
+     * 2. 再逆序关闭句柄：**不在界面线程上等后台**，也不等界面线程（停用任务只有 3 秒）
+     * 3. 任一释放失败 → 保留阻断状态，提示重启
      */
-    @Synchronized
     fun uninstall() {
-        val current = installation
-        installation = null
+        val session = com.spwmods.waerwak.listenstats.ui.HostInstallSession.stop()
+        val current = takeInstallation()
         if (current != null) {
             try {
                 current.close()
+                writeDiag("install", "release session=" + session + " ok")
             } catch (t: Throwable) {
                 blockedRollback = t
-                writeDiag("install", "release-failed " + t.javaClass.simpleName + ": " + t.message)
+                writeDiag(
+                    "install",
+                    "release-failed session=" + session + " " + t.javaClass.simpleName + ": " + t.message
+                )
                 System.err.println("[listen-stats] 卸载界面 hook 失败（需重启 SPW）: " + t.message)
             }
+        } else {
+            writeDiag("install", "release session=" + session + " noop（本次未完成安装）")
         }
         // 兜底：只在没有完整安装对象时才会走到这里（半截安装 / 旧路径）
         val overlay = handle
@@ -827,3 +1002,12 @@ internal fun Modifier.consumePress(): Modifier =
     }
 
 
+
+/** 安装结果持有者：跨线程传递注册消息与异常（避免在 lambda 里捕获可变局部变量） */
+internal class InstallOutcome {
+    @Volatile
+    var message: String? = null
+
+    @Volatile
+    var failure: Throwable? = null
+}

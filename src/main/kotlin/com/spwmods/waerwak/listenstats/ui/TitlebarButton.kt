@@ -107,6 +107,21 @@ object TitlebarButton {
     }
 
     /**
+     * 只做反射预检（不注册）
+     *
+     * 注入点缓存命中后先跑一遍：签名变了就返回原因，让上层丢掉缓存全扫一次。
+     */
+    fun preflight(t: HostUiTargets): String? {
+        if (!t.titlebarAvailable || !t.reuseHostCaption) return null
+        return try {
+            captionMethodOf(t.captionClass, t.captionMethodName)
+            null
+        } catch (e: Throwable) {
+            e.javaClass.simpleName + "：" + (e.message ?: "")
+        }
+    }
+
+    /**
      * 安装标题栏入口
      *
      * 标题栏是可选组：结构发现失败（[HostUiTargets.titlebarAvailable] = false）时直接返回 null，

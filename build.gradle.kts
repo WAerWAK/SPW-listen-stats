@@ -7,8 +7,8 @@ plugins {
 }
 
 group = "com.spwmods.waerwak.listenstats"
-// 1.5.1.1：开发版（注入层句柄所有权 + 可选组降级；发布时会改为 1.5.2）
-version = "1.5.1.1"
+// 1.5.1.2：开发版（注入会话代数 + EDT 注册/释放 + 缓存完整性；发布时会改为 1.5.2）
+version = "1.5.1.2"
 
 val pluginId = "com.spwmods.waerwak.listenstats"
 val pluginVersion = version.toString()

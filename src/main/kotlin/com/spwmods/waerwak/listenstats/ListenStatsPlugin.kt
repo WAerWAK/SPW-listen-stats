@@ -60,6 +60,8 @@ class ListenStatsPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext)
     }
 
     override fun stop() {
+        // 第一步：让在途的宿主扫描/界面准备立即作废（否则扫完还会把 hook 注册进去）
+        OverlayInjection.cancelPending()
         try {
             hotkey?.close()
         } catch (t: Throwable) {

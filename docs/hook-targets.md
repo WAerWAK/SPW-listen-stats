@@ -6,7 +6,7 @@
 - 代码：`"ui/discovery/"` 下的 `"HostBytecodeIndex"` / `"HostUiDiscovery"` / `"HostTargetResolver"`；版本表在 `"ui/HostUiTargets.kt"`；句柄所有权在 `"ui/HookHandles.kt"`
 - 依赖：宿主自带的 `net.bytebuddy.jar.asm`（不打包、不需要新增依赖）
 - 缓存：数据目录 `"host-targets.txt"`，key = 宿主 jar 绝对路径 + SHA-256 + 插件版本，`format=3`
-- 诊断：数据目录 `hook-diag.txt`，每次注入写 `resolve source=scan|cache|table`、`install ok handles=N …warnings=N`
+- 诊断：数据目录 `hook-diag.txt`，每次注入写 `resolve source=scan|cache|table`、`install ok handles=N …warnings=N via=… ms=…`
 
 ## 0. 句柄所有权与可选组（1.5.1.1 起）
 
@@ -17,6 +17,14 @@
 - **不重试的情形**：权限不足/被收回、线程中断、任务取消（`HookFailurePolicy.noRetry`），避免反复扫码。
 - 缓存格式 3 修正了两个 1.5.1 的解析 bug（导致缓存一直不命中、命中后又丢内层点位）：
   `caption.control` 行只有 3 段；`layer/content` 行是 4 段（旧代码分别要求 4/5 段）。
+- **缓存只在“扫描 + 完整安装”后写入**（`HostTargetResolver.saveCache`）：缺标题栏/材质时不写，
+  避免下次启动命中一份不完整目标。
+- **会话代号**（`ui/HostInstallSession.kt`）：每次启用分配一个代号，`stop()` 递增；
+  扫描前后与注册前各校验一次，停用后迟到的扫描结果不会把 hook 装进去。
+- **注册与释放都在宿主界面线程（AWT EDT）**：扫描仍在后台线程；安装等待 EDT 最多 5 s，
+  超时写 `edt-timeout` 并放弃本次注册（不影响听歌记录）。停用不等待 EDT。
+- **缓存命中先做反射预检**（标题栏 caption 方法 + 内层材质方法）：预检失败写
+  `cache-preflight-failed` 并丢弃缓存全扫一次（只重试一次）。
 
 ## 1. 结构判据（自动发现规则）
 
@@ -45,9 +53,11 @@
 
 `hook-diag.txt` 成功样本（1.5.1.1 起多了 `handles` / `material` / `warnings`）：
 
-    resolve  source=cache  page=androidx.compose.ui.Ɏ  titlebar=androidx.compose.ui.ઈ  caption=androidx.compose.ui.ݕ  …\ffmpeg-x64.dll
+    resolve  source=cache  session=1  page=androidx.compose.ui.Ɏ  titlebar=androidx.compose.ui.ઈ  caption=androidx.compose.ui.ݕ  …\ffmpeg-x64.dll
     material  inner  androidx/compose/animation/SharedTransitionScopeKt#SharedTransitionLayout @ com/xuncorp/voxzen/ui/navigation/AppNavigationKt
-    install  ok handles=4 layer=false material=true nav=true titlebar=true titlebarErr=- warnings=0
+    install  ok session=1 handles=4 layer=false material=true nav=true titlebar=true titlebarErr=- warnings=0 via=cache ms=454
+
+停用/启用时应看到成对的：`cancel-pending session=…`（停用第一步）→ `release session=… ok`（句柄已全部释放）。
 
 > **Layer 点位为什么默认关闭**：包住宿主 Layer 后，我们的面板会被放到窗口原点（盖住顶栏），
 > 且隐藏宿主内容会连侧栏/顶栏一起隐藏；旧点位（替换 `AppNavigation` 调用点）才能让面板落在内容区。

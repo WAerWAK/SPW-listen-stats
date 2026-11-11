@@ -12,7 +12,14 @@ data class ResolvedHostTargets(
     val targets: HostUiTargets,
     val layer: HostLayerSite?,
     val source: String,
-    val detail: String
+    val detail: String,
+    /** 导航内容 composable（内层材质点位，写缓存需要） */
+    val content: HostLayerSite? = null,
+    /** 本次是扫描得到的（只有这种情况才允许写缓存） */
+    val fromScan: Boolean = false,
+    /** 缓存身份：宿主 jar 真实路径与 SHA-256 */
+    val cacheKeyPath: String? = null,
+    val cacheKeySha: String? = null
 )
 
 /**
@@ -36,15 +43,40 @@ object HostTargetResolver {
     private var memoryVersion: String = ""
 
     @Synchronized
-    fun resolve(pluginVersion: String, hostVersion: String, cacheDir: File?): ResolvedHostTargets? {
-        val cached = memory
-        if (cached != null && memoryVersion == pluginVersion) return cached
-        val result = compute(pluginVersion, hostVersion, cacheDir)
+    fun resolve(
+        pluginVersion: String,
+        hostVersion: String,
+        cacheDir: File?,
+        ignoreCache: Boolean = false
+    ): ResolvedHostTargets? {
+        if (!ignoreCache) {
+            val cached = memory
+            if (cached != null && memoryVersion == pluginVersion) return cached
+        }
+        val result = compute(pluginVersion, hostVersion, cacheDir, ignoreCache)
         if (result != null) {
             memory = result
             memoryVersion = pluginVersion
         }
         return result
+    }
+
+    /**
+     * 安装成功后写缓存
+     *
+     * 只有“扫描 + 完整安装”才写：否则下次启动会命中一份不完整的目标（比如没有标题栏）。
+     */
+    @Synchronized
+    fun saveCache(pluginVersion: String, cacheDir: File?, resolved: ResolvedHostTargets) {
+        if (!resolved.fromScan) return
+        val path = resolved.cacheKeyPath ?: return
+        writeCache(
+            cacheDir,
+            pluginVersion,
+            path,
+            resolved.cacheKeySha,
+            DiscoveredUiTargets(resolved.targets, resolved.layer, resolved.content)
+        )
     }
 
     /** 清空内存缓存（测试/重新启用插件时用） */
@@ -54,7 +86,12 @@ object HostTargetResolver {
         memoryVersion = ""
     }
 
-    private fun compute(pluginVersion: String, hostVersion: String, cacheDir: File?): ResolvedHostTargets? {
+    private fun compute(
+        pluginVersion: String,
+        hostVersion: String,
+        cacheDir: File?,
+        ignoreCache: Boolean = false
+    ): ResolvedHostTargets? {
         var source = "table"
         var detail = ""
         var discovered: DiscoveredUiTargets? = null
@@ -64,16 +101,33 @@ object HostTargetResolver {
             val sourcePath = HostBytecodeIndex.source()
             identityPath = sourcePath.toRealPath().toString()
             identitySha = sha256(sourcePath)
-            val fromCache = readCache(cacheDir, pluginVersion, identityPath, identitySha)
-            if (fromCache != null) {
-                return ResolvedHostTargets(fromCache.targets, fromCache.layer, "cache", identityPath)
+            if (!ignoreCache) {
+                val fromCache = readCache(cacheDir, pluginVersion, identityPath, identitySha)
+                if (fromCache != null) {
+                    return ResolvedHostTargets(
+                        fromCache.targets,
+                        fromCache.layer,
+                        "cache",
+                        identityPath,
+                        content = fromCache.content
+                    )
+                }
             }
             val index = HostBytecodeIndex.read(sourcePath)
             discovered = HostUiDiscovery.discover(index)
             source = "scan"
             detail = "classes=" + index.methods.size + " path=" + identityPath
-            writeCache(cacheDir, pluginVersion, identityPath, identitySha, discovered)
-            return ResolvedHostTargets(discovered.targets, discovered.layer, source, detail)
+            // 缓存改到“安装成功后”才写（见 saveCache）：扫描成功不等于注入成功
+            return ResolvedHostTargets(
+                discovered.targets,
+                discovered.layer,
+                source,
+                detail,
+                content = discovered.content,
+                fromScan = true,
+                cacheKeyPath = identityPath,
+                cacheKeySha = identitySha
+            )
         } catch (t: Throwable) {
             detail = t.javaClass.simpleName + ": " + (t.message ?: "")
         }
