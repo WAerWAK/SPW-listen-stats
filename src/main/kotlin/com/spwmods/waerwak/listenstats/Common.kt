@@ -153,27 +153,41 @@ internal fun CompactListRow(
     title: String,
     summary: String,
     value: String,
-    badge: String = ""
+    badge: String = "",
+    trackKey: String = "",
+    onClick: ((String) -> Unit)? = null,
+    /** 双击曲目：直接播放（与排行页一致） */
+    onDoubleClick: (() -> Unit)? = null
 ) {
-    Row(
-        Modifier.fillMaxWidth().height(48.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        TrackCover(coverId, 30.dp)
-        Spacer(Modifier.width(8.dp))
-        Column(Modifier.weight(1f).padding(end = 6.dp)) {
-            TitleWithBadge(title, badge)
-            if (summary.isNotBlank()) {
-                Spacer(Modifier.height(1.dp))
-                Text(
-                    summary,
-                    fontSize = SaltDesign.fontSizeSub,
-                    lineHeight = 14.sp,
-                    color = LocalSaltPalette.current.subText
-                )
+    val content: @Composable () -> Unit = {
+        Row(
+            Modifier.fillMaxWidth().height(48.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TrackCover(coverId, 30.dp)
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f).padding(end = 6.dp)) {
+                TitleWithBadge(title, badge)
+                if (summary.isNotBlank()) {
+                    Spacer(Modifier.height(1.dp))
+                    Text(
+                        summary,
+                        fontSize = SaltDesign.fontSizeSub,
+                        lineHeight = 14.sp,
+                        color = LocalSaltPalette.current.subText
+                    )
+                }
             }
+            Text(value, fontSize = SaltDesign.fontSizeSub, color = LocalSaltPalette.current.subText)
         }
-        Text(value, fontSize = SaltDesign.fontSizeSub, color = LocalSaltPalette.current.subText)
+    }
+    if (trackKey.isNotBlank() && onClick != null) {
+        TappableRowSurface(
+            onTap = { onClick(trackKey) },
+            onDoubleTap = onDoubleClick
+        ) { content() }
+    } else {
+        Box(Modifier.fillMaxWidth()) { content() }
     }
 }
 
@@ -448,6 +462,60 @@ internal fun TrackCover(coverId: String, diameter: androidx.compose.ui.unit.Dp) 
 }
 
 
+/** 双击判定窗口（单击详情同样延迟这么久，等双击窗口结束） */
+internal const val DOUBLE_TAP_MS = 200L
+
+/**
+ * 列表行的点击容器
+ *
+ * - 无双击行为：交给 Material3 Surface(onClick)，自带涟漪与悬停状态
+ * - 有双击行为：自己判双击（宿主裁掉了 detectTapGestures），单击延迟到窗口结束
+ *   才执行；双击分支额外补一层悬停背景，视觉与其它列表行一致
+ */
+@Composable
+internal fun TappableRowSurface(
+    onTap: () -> Unit,
+    onDoubleTap: (() -> Unit)? = null,
+    content: @Composable () -> Unit
+) {
+    if (onDoubleTap == null) {
+        Surface(
+            onClick = onTap,
+            color = Color.Transparent,
+            modifier = Modifier.fillMaxWidth()
+        ) { content() }
+        return
+    }
+    var hovered by remember { mutableStateOf(false) }
+    val palette = LocalSaltPalette.current
+    val background = if (hovered) palette.highlight.copy(alpha = 0.08f) else Color.Transparent
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var pending by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var lastTapAt = remember { longArrayOf(0L) }
+    Surface(
+        color = background,
+        modifier = Modifier.fillMaxWidth()
+            .onPointerEvent(PointerEventType.Enter) { hovered = true }
+            .onPointerEvent(PointerEventType.Exit) { hovered = false }
+            .onPointerEvent(PointerEventType.Press) {
+                val now = System.currentTimeMillis()
+                if (now - lastTapAt[0] < DOUBLE_TAP_MS) {
+                    lastTapAt[0] = 0L
+                    pending?.cancel()
+                    pending = null
+                    onDoubleTap()
+                } else {
+                    lastTapAt[0] = now
+                    pending?.cancel()
+                    pending = scope.launch {
+                        kotlinx.coroutines.delay(DOUBLE_TAP_MS)
+                        onTap()
+                    }
+                }
+            }
+    ) { content() }
+}
+
 /** SaltUI Item 风格的两行条目：序号 + 封面 + 标题/副标题 + 右侧数值列 */
 @Composable
 internal fun ListRow(
@@ -466,13 +534,6 @@ internal fun ListRow(
     /** 双击曲目（仅歌曲行提供）：用于直接播放 */
     onDoubleClick: (() -> Unit)? = null
 ) {
-    val tap: () -> Unit = {
-        if (onRowClick != null) {
-            onRowClick()
-        } else if (trackKey.isNotBlank()) {
-            onClick(trackKey)
-        }
-    }
     val rowContent: @Composable () -> Unit = {
         Row(Modifier.fillMaxWidth().height(50.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -509,41 +570,20 @@ internal fun ListRow(
             }
         }
     }
-    if (onDoubleClick != null) {
-        // 双击播放：宿主裁掉了 detectTapGestures，这里用 Press 事件自己判双击。
-        // 单击详情延迟约 420ms 执行（等双击窗口），双击则立即播放并取消单击。
-        val scope = androidx.compose.runtime.rememberCoroutineScope()
-        var pending by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-        var lastTapAt = remember { longArrayOf(0L) }
-        Surface(
-            color = Color.Transparent,
-            modifier = Modifier.fillMaxWidth().onPointerEvent(PointerEventType.Press) {
-                val now = System.currentTimeMillis()
-                if (now - lastTapAt[0] < 420L) {
-                    lastTapAt[0] = 0L
-                    pending?.cancel()
-                    pending = null
-                    onDoubleClick()
-                } else {
-                    lastTapAt[0] = now
-                    pending?.cancel()
-                    pending = scope.launch {
-                        kotlinx.coroutines.delay(420L)
-                        tap()
-                    }
-                }
-            }
-        ) {
-            rowContent()
-        }
+    val primaryTap: (() -> Unit)? = if (onRowClick != null) {
+        onRowClick
+    } else if (trackKey.isNotBlank()) {
+        { onClick(trackKey) }
     } else {
-        Surface(
-            onClick = { tap() },
-            color = Color.Transparent,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            rowContent()
-        }
+        null
+    }
+    if (primaryTap == null) {
+        Box(Modifier.fillMaxWidth()) { rowContent() }
+    } else if (onDoubleClick != null) {
+        // 双击播放：单击延迟到双击窗口结束后才打开详情
+        TappableRowSurface(onTap = primaryTap, onDoubleTap = onDoubleClick) { rowContent() }
+    } else {
+        TappableRowSurface(onTap = primaryTap) { rowContent() }
     }
 }
 

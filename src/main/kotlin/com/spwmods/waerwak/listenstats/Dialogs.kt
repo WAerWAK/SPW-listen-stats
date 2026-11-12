@@ -215,27 +215,34 @@ internal fun GroupDetailDialog(payload: String, onDismiss: () -> Unit) {
                 while (from < items.size && shown < pageSize) {
                     val t = items[from]
                     if (shown > 0) RowDivider()
-                    Row(
-                        Modifier.fillMaxWidth().height(46.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    // 行可点：打开曲目详情（详情弹窗在上层，关闭时先关它）
+                    Surface(
+                        onClick = { TrackDetailState.open.value = t.key },
+                        color = Color.Transparent,
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        TrackCover(t.id, 32.dp)
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f).padding(end = 8.dp)) {
-                            TitleWithBadge(t.title.ifBlank { "未知曲目" }, missingBadgeOf(t.key))
-                            Spacer(Modifier.height(1.dp))
-                            Text(
-                                t.artist,
-                                fontSize = SaltDesign.fontSizeSub,
-                                lineHeight = 13.sp,
-                                color = p.subText
-                            )
-                        }
-                        Box(Modifier.width(56.dp), contentAlignment = Alignment.CenterEnd) {
-                            Text(t.count.toString() + " 次", fontSize = SaltDesign.fontSizeSub, color = p.text)
-                        }
-                        Box(Modifier.width(74.dp), contentAlignment = Alignment.CenterEnd) {
-                            Text(formatMsPrecise(t.listenedMs), fontSize = SaltDesign.fontSizeSub, color = p.subText)
+                        Row(
+                            Modifier.fillMaxWidth().height(46.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TrackCover(t.id, 32.dp)
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                                TitleWithBadge(t.title.ifBlank { "未知曲目" }, missingBadgeOf(t.key))
+                                Spacer(Modifier.height(1.dp))
+                                Text(
+                                    t.artist,
+                                    fontSize = SaltDesign.fontSizeSub,
+                                    lineHeight = 13.sp,
+                                    color = p.subText
+                                )
+                            }
+                            Box(Modifier.width(56.dp), contentAlignment = Alignment.CenterEnd) {
+                                Text(t.count.toString() + " 次", fontSize = SaltDesign.fontSizeSub, color = p.text)
+                            }
+                            Box(Modifier.width(74.dp), contentAlignment = Alignment.CenterEnd) {
+                                Text(formatMsPrecise(t.listenedMs), fontSize = SaltDesign.fontSizeSub, color = p.subText)
+                            }
                         }
                     }
                     from++

@@ -7,8 +7,8 @@ plugins {
 }
 
 group = "com.spwmods.waerwak.listenstats"
-// 1.5.2.1：开发版（修复配置页/快捷键页跳转与 Navigator 获取；新增左侧栏入口）
-version = "1.5.2.1"
+// 1.5.2.2：开发版（概览列表双击播放/点击详情/悬浮背景，分组详情可点进曲目详情，双击阈值 200ms）
+version = "1.5.2.2"
 
 val pluginId = "com.spwmods.waerwak.listenstats"
 val pluginVersion = version.toString()

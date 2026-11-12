@@ -656,13 +656,14 @@ internal fun StatsOverlay(onClose: () -> Unit) {
     if (dayDetailDate.isNotEmpty()) {
         DayDetailDialog(date = dayDetailDate, onDismiss = { dayDetailDate = "" })
     }
-    val detailKey = TrackDetailState.open.value
-    if (detailKey != null) {
-        TrackDetailDialog(trackKey = detailKey, onDismiss = { TrackDetailState.open.value = null })
-    }
     val groupPayload = GroupDetailState.open.value
     if (groupPayload.isNotEmpty()) {
         GroupDetailDialog(payload = groupPayload, onDismiss = { GroupDetailState.open.value = "" })
+    }
+    // 曲目详情渲染在分组详情**之后**：从分组里点开歌曲时它是上层，关闭时先关它
+    val detailKey = TrackDetailState.open.value
+    if (detailKey != null) {
+        TrackDetailDialog(trackKey = detailKey, onDismiss = { TrackDetailState.open.value = null })
     }
     if (CalState.open.value) {
         CalendarPicker(

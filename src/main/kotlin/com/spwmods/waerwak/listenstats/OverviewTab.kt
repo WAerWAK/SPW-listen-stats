@@ -27,6 +27,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import com.spwmods.waerwak.listenstats.stats.StatsStore
+import com.spwmods.waerwak.listenstats.stats.TrackAgg
 import com.spwmods.waerwak.listenstats.ui.LocalSaltPalette
 import com.spwmods.waerwak.listenstats.ui.MissingState
 import com.spwmods.waerwak.listenstats.ui.SaltDesign
@@ -76,7 +77,10 @@ internal fun OverviewTab(tick: Long) {
                             title = t.title.ifBlank { "未知曲目" },
                             summary = t.artist,
                             value = formatLastPlayed(t.lastPlayed),
-                            badge = missingBadgeOf(t.key)
+                            badge = missingBadgeOf(t.key),
+                            trackKey = t.key,
+                            onClick = { key -> TrackDetailState.open.value = key },
+                            onDoubleClick = { playOverviewTrack(t) }
                         )
                         i++
                     }
@@ -97,7 +101,10 @@ internal fun OverviewTab(tick: Long) {
                             title = t.title.ifBlank { "未知曲目" },
                             summary = t.artist,
                             value = t.count.toString() + " 次",
-                            badge = missingBadgeOf(t.key)
+                            badge = missingBadgeOf(t.key),
+                            trackKey = t.key,
+                            onClick = { key -> TrackDetailState.open.value = key },
+                            onDoubleClick = { playOverviewTrack(t) }
                         )
                         i++
                     }
@@ -201,6 +208,15 @@ internal fun durationParts(ms: Long, mode: Int): List<Pair<String, String>> {
     return listOf(minutes.toString() to "分")
 }
 
+
+/** 概览页双击曲目：与排行页同一个播放路径 */
+private fun playOverviewTrack(track: TrackAgg) {
+    if (track.id.isNotBlank()) {
+        HostSongPlayback.playById(track.id)
+    } else {
+        toast("这首歌曲缺少标识，无法播放", false)
+    }
+}
 
 /** 数值 + 单位分字号（单位取数字的一半），可选点击（仅内容区可点，不含标题） */
 @Composable
