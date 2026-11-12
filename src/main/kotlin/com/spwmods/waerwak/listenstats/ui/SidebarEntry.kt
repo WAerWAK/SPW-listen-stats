@@ -278,10 +278,31 @@ object SidebarEntry {
     @Composable
     private fun SidebarStatsRow() {
         val row = rowMethod ?: return
+        // 侧栏样式被我们换成了"未选中副本"：统计行要恢复成宿主原始样式，否则不会高亮
+        val sel = selection
+        val original = LocalUnmaskedSidebarStyle.current
+        if (sel != null && original != null) {
+            CompositionLocalProvider(sel.local provides original) {
+                SidebarRowBody(row)
+            }
+        } else {
+            SidebarRowBody(row)
+        }
+    }
+
+    @Composable
+    private fun SidebarRowBody(row: Method) {
         val composer = currentComposer
         val active = OverlayInjection.panelOpen.value
-        val modifier = Modifier.semantics { contentDescription = "统计" }
-            .onPointerEvent(PointerEventType.Press) { OverlayInjection.togglePanel() }
+        val onClick: () -> Unit = { OverlayInjection.togglePanel() }
+        var modifier = Modifier.semantics { contentDescription = "统计" }
+        // 悬停背景 / 按下动画都靠宿主的 clickable（反射拿，不依赖编译期可见性）
+        val clickable = SidebarClickable.modifier(onClick)
+        if (clickable != null) {
+            modifier = modifier.then(clickable)
+        } else {
+            modifier = modifier.onPointerEvent(PointerEventType.Press) { onClick() }
+        }
         val icon: @Composable BoxScope.() -> Unit = { SidebarGlyph() }
         val args = arrayOf<Any?>(
             "统计",
@@ -305,7 +326,7 @@ object SidebarEntry {
                     if (dir != null) {
                         com.spwmods.waerwak.listenstats.stats.LogFiles.append(
                             File(dir, "hook-diag.txt"),
-                            "sidebar  drawn active=" + active + "\n"
+                            "sidebar  drawn active=" + active + " clickable=" + (clickable != null) + "\n"
                         )
                     }
                 } catch (t: Throwable) {
@@ -370,6 +391,45 @@ object SidebarEntry {
 }
 
 /**
+ * 宿主的 clickable（反射）
+ *
+ * 我们编译期看不到 `Modifier.clickable`（宿主 R8 把 Kotlin 元数据裁了），但运行时方法还在：
+ * 反射拿到 `ClickableKt.clickable-XHw0xAI`（Role 为 value class，方法名带后缀）即可获得
+ * 原生的悬停背景、按下动画与涟漪，无需自己画。
+ */
+private object SidebarClickable {
+
+    private val method: Method? by lazy {
+        try {
+            val loader = SidebarEntry::class.java.classLoader
+            val owner = Class.forName("androidx.compose.foundation.ClickableKt", false, loader)
+            val roleType = Class.forName("androidx.compose.ui.semantics.Role", false, loader)
+            owner.getDeclaredMethod(
+                "clickable-XHw0xAI",
+                Modifier::class.java,
+                java.lang.Boolean.TYPE,
+                String::class.java,
+                roleType,
+                kotlin.jvm.functions.Function0::class.java
+            ).also { it.isAccessible = true }
+        } catch (t: Throwable) {
+            System.err.println("[listen-stats] 原生 clickable 不可用，退化为按下即触发: " + t.message)
+            null
+        }
+    }
+
+    fun modifier(onClick: () -> Unit): Modifier? {
+        val m = method ?: return null
+        return try {
+            m.invoke(null, Modifier, true, null, null, onClick) as? Modifier
+        } catch (t: Throwable) {
+            System.err.println("[listen-stats] 原生 clickable 调用失败: " + t.message)
+            null
+        }
+    }
+}
+
+/**
  * 侧栏样式的"未选中副本"
  *
  * 反射宿主 `SidebarItemStyle`：10 参构造器 + 若干 getter。任何一步不成立就返回 null，
@@ -385,7 +445,7 @@ internal class SidebarSelection private constructor(
     private val colorGetter: Method,
     private val textGetter: Method,
     private val backgroundGetter: Method,
-    private val local: ProvidableCompositionLocal<Any?>,
+    val local: ProvidableCompositionLocal<Any?>,
     private val invokeContent: Method
 ) {
 
