@@ -96,10 +96,9 @@ object OverlayInjection {
     /**
      * 悬浮圆钮入口是否显示
      *
-     * 配置页的「悬浮按钮-卸载」只隐藏圆钮，**不**卸载注入本身：
-     * 顶栏按钮、导航感知、面板都保留，否则面板就再也唤不出来了。
+     * 1.5.1.3 起由 [com.spwmods.waerwak.listenstats.ui.EntrySwitches] 统一管理
+     * （宿主配置页 switch，hook 常驻）。
      */
-    val entryEnabled = mutableStateOf(true)
 
     /**
      * 关闭最上层弹层（阈值编辑 / 曲目详情 / 当天明细 / 日历浮窗）。
@@ -134,11 +133,45 @@ object OverlayInjection {
     fun togglePanel() {
         if (handle == null) {
             val message = install()
-            if (handle != null) panelOpen.value = true
+            if (handle != null) openPanel()
             toast(message, handle != null)
             return
         }
-        panelOpen.value = !panelOpen.value
+        if (panelOpen.value) {
+            panelOpen.value = false
+        } else {
+            openPanel()
+        }
+    }
+
+    /**
+     * 打开面板（所有入口统一走这里）
+     *
+     * 宿主刚启动就点浮钮时，直接组合会同步读 daily/events 造成首帧卡顿；
+     * 这里先在后台等一次预热（最多 1200ms），再回到界面线程打开。
+     * 已预热完成时立即打开，不引入任何延迟。
+     */
+    fun openPanel() {
+        if (panelOpen.value) return
+        if (StatsStore.isPrefetchDone()) {
+            panelOpen.value = true
+            return
+        }
+        val session = com.spwmods.waerwak.listenstats.ui.HostInstallSession.current()
+        val thread = Thread({
+            val startedAt = System.nanoTime()
+            val done = StatsStore.awaitPrefetch(1200L)
+            val ms = (System.nanoTime() - startedAt) / 1_000_000L
+            java.awt.EventQueue.invokeLater(object : Runnable {
+                override fun run() {
+                    if (!com.spwmods.waerwak.listenstats.ui.HostInstallSession.isCurrent(session)) return
+                    writeDiag("open", "prepare_ms=" + ms + " prefetched=" + done)
+                    panelOpen.value = true
+                }
+            })
+        }, "listen-stats-open")
+        thread.isDaemon = true
+        thread.start()
     }
 
     @Volatile
@@ -162,79 +195,11 @@ object OverlayInjection {
 
     fun installed(): Boolean = handle != null
 
-    @JvmStatic
-    @JvmName("installOverlayFromConfig")
-    fun installOverlayFromConfig() {
-        val wasInstalled = handle != null
-        val message = install()
-        entryEnabled.value = true
-        try {
-            com.spwmods.waerwak.listenstats.ui.UiStateStore.saveEntryEnabled(true)
-        } catch (t: Throwable) {
-            // 持久化失败不影响本次生效
-        }
-        if (wasInstalled) {
-            toast("悬浮按钮已恢复显示", true)
-        } else {
-            toast(message, message.startsWith("已注册"))
-        }
-    }
-
-    @JvmStatic
-    @JvmName("uninstallOverlayFromConfig")
-    fun uninstallOverlayFromConfig() {
-        // 只隐藏圆钮：注入、顶栏按钮、导航感知全部保留，面板仍可由顶栏按钮打开
-        entryEnabled.value = false
-        try {
-            com.spwmods.waerwak.listenstats.ui.UiStateStore.saveEntryEnabled(false)
-        } catch (t: Throwable) {
-            // 持久化失败不影响本次生效
-        }
-        if (handle == null) {
-            toast("悬浮按钮已隐藏（当前未注入，可在需要时重新安装）", true)
-        } else {
-            toast("悬浮按钮已隐藏，顶栏按钮仍可打开统计页", true)
-        }
-    }
-
     /** 宿主版本（注入目标按版本选择；取不到时按最新已知处理） */
     private fun hostVersion(): String = try {
         HostProbe.pluginContext()?.spwVersion ?: ""
     } catch (t: Throwable) {
         ""
-    }
-
-    /** 配置页：安装顶栏按钮 */
-    @JvmStatic
-    @JvmName("installTitlebarFromConfig")
-    fun installTitlebarFromConfig() {
-        val resolved = com.spwmods.waerwak.listenstats.ui.discovery.HostTargetResolver.resolve(
-            pluginVersion = HostProbe.pluginContext()?.pluginVersion ?: "?",
-            hostVersion = hostVersion(),
-            cacheDir = StatsStore.dataDirOrNull()
-        )
-        if (resolved == null) {
-            toast("安装失败：无法识别宿主界面", false)
-            return
-        }
-        val ok = com.spwmods.waerwak.listenstats.ui.TitlebarButton.install(resolved.targets)
-        if (ok) {
-            toast("顶栏按钮已安装（标题栏 Quick 左侧）", true)
-        } else {
-            toast("安装失败：" + (com.spwmods.waerwak.listenstats.ui.TitlebarButton.lastError ?: "未知原因"), false)
-        }
-    }
-
-    /** 配置页：卸载顶栏按钮 */
-    @JvmStatic
-    @JvmName("uninstallTitlebarFromConfig")
-    fun uninstallTitlebarFromConfig() {
-        try {
-            com.spwmods.waerwak.listenstats.ui.TitlebarButton.uninstall()
-            toast("顶栏按钮已卸载", true)
-        } catch (t: Throwable) {
-            toast("卸载失败：" + (t.message ?: t.javaClass.simpleName), false)
-        }
     }
 
     /** 配置页入口：打开统计面板并直接定位到「信息」页 */
@@ -247,7 +212,7 @@ object OverlayInjection {
             return
         }
         pendingTab.value = 3
-        panelOpen.value = true
+        openPanel()
         toast("已打开统计面板，可在「信息 → 采集」调整计数门槛", true)
     }
 
@@ -450,7 +415,6 @@ object OverlayInjection {
             // 读取 UI 状态（内容宽度百分比等）
             contentPercent.value = UiStateStore.loadContentPercent()
             fontExtraPercent.value = UiStateStore.loadFontExtraPercent()
-            entryEnabled.value = UiStateStore.loadEntryEnabled()
             hmsRanking.value = UiStateStore.loadDurationHmsRanking()
             // 导航感知：切页时关面板，返回键优先关弹层/面板（可选组，失败只降级）
             var navError: String? = null
@@ -477,7 +441,7 @@ object OverlayInjection {
                 onForward = {
                     if (forwardRestorePending && !panelOpen.value) {
                         forwardRestorePending = false
-                        panelOpen.value = true
+                        openPanel()
                         true
                     } else {
                         forwardRestorePending = false
@@ -575,6 +539,12 @@ object OverlayInjection {
             )
             box = installed
             installation = installed
+            // 入口开关（宿主配置页 switch）开始跟随：hook 已就位，开关只切绘制
+            com.spwmods.waerwak.listenstats.ui.EntrySwitches.start()
+            // 部分入口不可用时提示一次（不阻断；具体原因在诊断里）
+            if (warnings.isNotEmpty()) {
+                toast("听歌统计已启用，但部分入口暂时不可用（不影响听歌记录）", false)
+            }
             "已注册：窗口右下角会出现一个「只露一点」的圆"
         } catch (t: Throwable) {
             // 中止：尽力回滚；回滚不完整时保留原因，重启前不再尝试安装
@@ -716,6 +686,7 @@ object OverlayInjection {
      */
     fun cancelPending() {
         val session = com.spwmods.waerwak.listenstats.ui.HostInstallSession.stop()
+        com.spwmods.waerwak.listenstats.ui.EntrySwitches.stop()
         writeDiag("install", "cancel-pending session=" + session)
     }
 
@@ -742,6 +713,7 @@ object OverlayInjection {
      */
     fun uninstall() {
         val session = com.spwmods.waerwak.listenstats.ui.HostInstallSession.stop()
+        com.spwmods.waerwak.listenstats.ui.EntrySwitches.stop()
         val current = takeInstallation()
         if (current != null) {
             try {
@@ -796,6 +768,20 @@ object StatsActions {
     @JvmName("resetStats")
     fun resetStats() {
         toast(StatsStore.reset(), true)
+    }
+
+    /** 配置页：写一份脱敏诊断报告到数据目录（后台线程，不卡界面） */
+    @JvmStatic
+    @JvmName("writeDiagReport")
+    fun writeDiagReport() {
+        com.spwmods.waerwak.listenstats.ui.BackgroundDialogs.run({
+            DiagReport.write()
+        }, { message ->
+            if (message != null) {
+                val ok = !message.startsWith("失败：")
+                toast(if (ok) "诊断报告已写入：" + message else message, ok)
+            }
+        })
     }
 
 

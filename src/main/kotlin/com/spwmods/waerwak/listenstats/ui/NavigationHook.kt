@@ -33,6 +33,23 @@ object NavigationHook {
     @Volatile
     private var installation: AutoCloseable? = null
 
+    /** 最近一次导航时的 Navigator 实例（弱引用，供“面板内直达配置页”用） */
+    @Volatile
+    private var navigatorRef: java.lang.ref.WeakReference<Any>? = null
+
+    /** 拿到宿主 Navigator 实例；未导航过则为 null */
+    fun navigatorOrNull(): Any? {
+        val ref = navigatorRef
+        return ref?.get()
+    }
+
+    private fun rememberNavigator(value: Any?) {
+        if (value == null) return
+        val ref = navigatorRef
+        if (ref != null && ref.get() === value) return
+        navigatorRef = java.lang.ref.WeakReference(value)
+    }
+
     @Volatile
     var lastError: String? = null
         private set
@@ -63,6 +80,7 @@ object NavigationHook {
         routeParams.add(ROUTE_CLASS)
         val pageChange = object : MethodHook() {
             override fun before(call: MethodHookParam) {
+                rememberNavigator(call.thisObject)
                 try {
                     onPageChange()
                 } catch (t: Throwable) {
@@ -76,6 +94,7 @@ object NavigationHook {
             handles += registrar.hookMethod(NAVIGATOR_CLASS, "replace", routeParams, pageChange)
             handles += registrar.hookMethod(NAVIGATOR_CLASS, "forward", object : MethodHook() {
                 override fun before(call: MethodHookParam) {
+                    rememberNavigator(call.thisObject)
                     // 前进优先用于恢复面板（鼠标前进侧键也会走宿主这个方法）；
                     // 其余情况仍按"换页关面板"处理。
                     val consumed = try {
@@ -96,6 +115,7 @@ object NavigationHook {
             })
             handles += registrar.hookMethod(NAVIGATOR_CLASS, "back", object : MethodHook() {
                 override fun before(call: MethodHookParam) {
+                    rememberNavigator(call.thisObject)
                     val consumed = try {
                         onBack()
                     } catch (t: Throwable) {

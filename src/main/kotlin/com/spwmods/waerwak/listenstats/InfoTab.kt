@@ -122,6 +122,18 @@ internal fun InfoTab(
                     LinkRow("GitHub", "WAerWAK/SPW-listen-stats") { openUrl(REPO_URL) }
                     RowDivider()
                     LinkRow("Steam 创意工坊", "听歌统计 · 3822834646") { openUrl(WORKSHOP_URL) }
+                    RowDivider()
+                    // 直达宿主「模组管理 → 听歌统计」配置页（不另造窗口）
+                    LinkRow("插件配置", "打开设置") {
+                        OverlayInjection.closePanel()
+                        java.awt.EventQueue.invokeLater(object : Runnable {
+                            override fun run() {
+                                val error =
+                                    com.spwmods.waerwak.listenstats.ui.HostConfigRoute.open(snap.pluginId)
+                                if (error != null) toast("打开配置失败：" + error, false)
+                            }
+                        })
+                    }
                 }
             }
             Column(Modifier.weight(1f)) {
@@ -406,6 +418,24 @@ internal fun InfoTab(
                 ItemRow("数据读取", com.spwmods.waerwak.listenstats.stats.StatsStore.loadError() ?: "正常")
                 RowDivider()
                 ItemRow("封面缓存", com.spwmods.waerwak.listenstats.ui.CoverCache.statsText())
+                RowDivider()
+                AdjustableRow(
+                    label = "诊断报告",
+                    value = "写入数据目录",
+                    onClick = {
+                        val t = Thread({
+                            val result = DiagReport.write()
+                            java.awt.EventQueue.invokeLater(object : Runnable {
+                                override fun run() {
+                                    val ok = !result.startsWith("失败：")
+                                    toast(if (ok) "诊断报告已写入：" + result else result, ok)
+                                }
+                            })
+                        }, "listen-stats-diag-report")
+                        t.isDaemon = true
+                        t.start()
+                    }
+                )
                 RowDivider()
                 ItemRow("标题栏按钮", com.spwmods.waerwak.listenstats.ui.TitlebarButton.statusText())
                 RowDivider()

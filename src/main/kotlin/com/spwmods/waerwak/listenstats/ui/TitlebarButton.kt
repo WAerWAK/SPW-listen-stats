@@ -176,6 +176,8 @@ object TitlebarButton {
 
     @Composable
     private fun TitlebarEntry() {
+        // 入口开关（宿主配置页 switch）：hook 常驻，关掉只不绘制
+        if (!EntrySwitches.titlebar) return
         val t = targets
         if (t == null || !t.reuseHostCaption) {
             FallbackEntry()

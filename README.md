@@ -5,7 +5,7 @@
 <h1 align="center">听歌统计 · Salt Player for Windows 插件</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC-v1.5.1-8B5CF6?labelColor=1F2937" alt="最新版本">
+  <img src="https://img.shields.io/badge/%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC-v1.5.2-8B5CF6?labelColor=1F2937" alt="最新版本">
   <img src="https://img.shields.io/badge/SPW-1.19.3-3B82F6?labelColor=1F2937" alt="SPW 版本">
   <img src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows-0EA5E9?labelColor=1F2937" alt="平台">
   <img src="https://img.shields.io/badge/license-Apache--2.0-22C55E?labelColor=1F2937" alt="许可证">
@@ -51,7 +51,7 @@ GitHub 风格年度热力图（可切换近一年 / 具体年份，悬浮显示�
 
 ### 模组管理页
 
-导出 CSV、备份数据、**恢复数据-覆盖当前**、**恢复数据-合并当前**（重复导入不会重复计数）、清空统计，以及悬浮按钮与顶栏按钮的安装 / 卸载。
+导出 CSV、备份数据、**恢复数据-覆盖当前**、**恢复数据-合并当前**（重复导入不会重复计数）、清空统计；配置页按「入口 / 数据 / 高级诊断」分组，还有一个「写入诊断报告」按钮。
 
 <img src="docs/screenshots/config.png" width="100%" alt="模组管理页">
 
@@ -121,13 +121,15 @@ com.spwmods.waerwak.listenstats
 
 | 按钮 | 作用 |
 |---|---|
+| 打开听歌统计 | 直接打开统计面板（任何入口不可用时都能用） |
 | 导出 CSV | 弹出保存对话框，导出曲目汇总表（UTF-8 BOM，Excel 可直接打开） |
 | 备份数据 | 打包为 zip（字典 + 聚合 + 明细 + 配置 + 面板状态） |
 | 恢复数据-覆盖当前 | 先显示备份摘要，确认后用备份替换（现有数据改名 `.bak` 保留；备份带校验和，损坏会被拒绝） |
 | 恢复数据-合并当前 | 保留现有统计，把备份里的播放明细并进来（按会话去重，可重复导入） |
 | 清空统计 | 内存清零，数据文件改名 `.bak`（可恢复） |
-| 悬浮按钮-安装 / 卸载 | 显示 / 仅隐藏右下角圆钮（不影响顶栏按钮与面板） |
-| 顶栏按钮-安装 / 卸载 | 添加 / 移除标题栏的统计入口 |
+| 写入诊断报告 | 把版本、权限、界面接入状态与最近日志写到数据目录（不含歌名与音频路径） |
+
+配置页还有两个开关：**显示悬浮圆钮**、**显示标题栏按钮**（默认都开），保存后立即生效。
 
 计数门槛、明细保留天数、字体大小、内容宽度上限在面板的「信息」页调整。
 

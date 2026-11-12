@@ -249,6 +249,8 @@ Kotlin 2.4.21 + Compose 插件 in-process 编译时，`firstOrNull { }` / `map {
 |---|---|---|---|
 | 当前倍速 | `com.xuncorp.voxzen.service.PlaybackController.getPlaybackSpeed(): Float` | 计时容差/停摆判据按真实倍速换算 | 反射取 `INSTANCE` + 方法存在；失败回退 1.0/4x |
 | 单曲播放 | `PiscesMediaItem(String×6)` → `PlaybackController.addToPlay/prepare/play` | 排行榜双击播放 | Metadata data2 字段顺序 = id/title/artist/album/albumArtist/path；构造器/方法签名校验；文件存在、id 一致、主线程执行 |
+| 配置变更监听 | `ConfigManager.addConfigChangeListener(String, Consumer<ConfigHelper>)` | 配置页开关保存后立即生效（配合 600 ms 轮询兜底） | 注册/注销都在 try 里；不支持时只靠轮询 |
+| 打开插件配置页 | `ScreenRoute$ModConfigContent(String pluginId)` + `Navigator.navigate(route)` | 面板信息页「插件配置」直达宿主管置页 | 构造后立刻校验 `getPluginId()`；要有 Navigator 实例（导航 hook 捕获） |
 
 - 单曲播放必须按 `addToPlay → prepare → play` 三步：只 addToPlay 会更新队列但不出声。
 - 曲目查询用官方 `WorkshopApi.library.getTrackById(id)`（CompletionStage，10 秒超时）。

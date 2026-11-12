@@ -26,6 +26,17 @@
 - **缓存命中先做反射预检**（标题栏 caption 方法 + 内层材质方法）：预检失败写
   `cache-preflight-failed` 并丢弃缓存全扫一次（只重试一次）。
 
+## 0.1 入口开关与配置直达（1.5.1.3+）
+
+- **入口开关**：`showFloatingButton` / `showTitlebarButton` 存在 `config.json`（宿主配置页 switch），
+  插件用 `ui/EntrySwitches.kt` 跟随：配置变更监听（有就即时）+ 600 ms 轮询兜底，
+  状态只在 EDT 更新。**开关只切绘制，hook 常驻**（不因开关反复注册/卸载）。
+- **旧值迁移**：`ui-state.json` 的 `entryEnabled` 只在 config 里还没有新键时迁移一次。
+- **面板直达配置页**：`ui/HostConfigRoute.kt` 反射构造 `ScreenRoute$ModConfigContent(pluginId)`，
+  用 `NavigationHook` 捕获的 Navigator 实例调 `navigate`；任一前提不满足就提示，不回退到自开窗口。
+- **诊断报告**：`DiagReport.write()` 写 `诊断报告-<时间戳>.txt`（版本/权限/注入态/计时异常/
+  `hook-diag.txt` 与 `listen-stats.log` 尾部）；**不含**歌名/歌手/音频路径（回归测试会断言）。
+
 ## 1. 结构判据（自动发现规则）
 
 只有"调用关系 + 描述符 + 唯一性"，没有任何混淆名：

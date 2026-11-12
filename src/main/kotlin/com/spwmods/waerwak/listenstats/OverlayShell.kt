@@ -214,7 +214,7 @@ internal fun OverlayHost() {
                 if (!opened) {
                     // ❗ 关键：未打开时不能有任何不透明背景，否则会盖住宿主页面
                     Box(Modifier.fillMaxSize()) {
-                        if (OverlayInjection.entryEnabled.value) {
+                        if (com.spwmods.waerwak.listenstats.ui.EntrySwitches.floating) {
                             EdgeEntry(
                                 hovered = hovered,
                                 onHoverChange = { hovered = it },

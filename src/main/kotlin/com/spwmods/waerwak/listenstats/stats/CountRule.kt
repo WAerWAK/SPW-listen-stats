@@ -55,7 +55,8 @@ object CountRule {
     var ignoreMinSeconds: Int = 5
         private set
 
-    private fun helper(): ConfigHelper? = try {
+    /** 兼容旧调用（部分测试/工具直接拿 helper 读写门槛） */
+    internal fun configHelper(): ConfigHelper? = try {
         WorkshopApi.manager.createConfigManager().getConfig("config.json")
     } catch (t: Throwable) {
         null
@@ -66,20 +67,19 @@ object CountRule {
         val now = System.currentTimeMillis()
         if (now - lastLoadAt < LOAD_THROTTLE_MS) return
         lastLoadAt = now
-        try {
-            val h = helper() ?: return
-            // 每次 reload：宿主配置页的控件可能用另一份 ConfigHelper 缓存保存，
-            // 不 reload 会读到启动时的旧值（为以后加 edittext 预留）。
-            h.reload()
-            minSeconds = ((h.get(KEY_MIN_SEC, 30) as? Number)?.toInt() ?: 30).coerceIn(LIMIT_MIN_SEC, LIMIT_MAX_SEC)
-            // 下限 1：percent=0 时「取较小」模式的门槛会变成 0，任何一次位置增量都算计数
-            percent = ((h.get(KEY_PERCENT, 50) as? Number)?.toInt() ?: 50).coerceIn(1, 100)
-            mode = if (h.get(KEY_MODE, "min") == "min") "min" else "max"
-            ignoreMinSeconds = ((h.get(KEY_IGNORE_SEC, 5) as? Number)?.toInt() ?: 5)
-                .coerceIn(LIMIT_IGNORE_MIN_SEC, LIMIT_IGNORE_MAX_SEC)
-        } catch (t: Throwable) {
-            // 读失败就用默认值
-        }
+        // 配置不可用（测试环境/宿主未就绪）时保留内存值，不能用默认值覆盖
+        if (!PluginConfig.isAvailable()) return
+        // 统一走 PluginConfig：读前 reload，避免拿到启动时的旧值
+        minSeconds = PluginConfig.getInt(KEY_MIN_SEC, 30, LIMIT_MIN_SEC, LIMIT_MAX_SEC)
+        // 下限 1：percent=0 时「取较小」模式的门槛会变成 0，任何一次位置增量都算计数
+        percent = PluginConfig.getInt(KEY_PERCENT, 50, 1, 100)
+        mode = if (PluginConfig.getString(KEY_MODE, "min") == "min") "min" else "max"
+        ignoreMinSeconds = PluginConfig.getInt(
+            KEY_IGNORE_SEC,
+            5,
+            LIMIT_IGNORE_MIN_SEC,
+            LIMIT_IGNORE_MAX_SEC
+        )
     }
 
     @Synchronized
@@ -88,15 +88,12 @@ object CountRule {
         percent = newPercent.coerceIn(1, 100)
         mode = if (newMode == "min") "min" else "max"
         ignoreMinSeconds = newIgnoreSec.coerceIn(LIMIT_IGNORE_MIN_SEC, LIMIT_IGNORE_MAX_SEC)
-        try {
-            val h = helper() ?: return
+        // 读-改-写：先 reload 再 set，不会把宿主配置页刚改的其它项覆盖掉
+        PluginConfig.edit { h ->
             h.set(KEY_MIN_SEC, minSeconds)
             h.set(KEY_PERCENT, percent)
             h.set(KEY_MODE, mode)
             h.set(KEY_IGNORE_SEC, ignoreMinSeconds)
-            h.save()
-        } catch (t: Throwable) {
-            // 写失败保持内存值，下次再试
         }
     }
 

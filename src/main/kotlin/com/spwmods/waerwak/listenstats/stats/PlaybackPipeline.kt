@@ -167,7 +167,16 @@ object PlaybackPipeline {
             bootstrapSession()
             while (running) {
                 val event = queue.poll(IDLE_POLL_MS, TimeUnit.MILLISECONDS)
-                if (event != null) process(event)
+                if (event != null) {
+                    // busy 在取出后立刻置位：测试的 awaitIdle 依赖“队列空 + 不忙”两个条件，
+                    // 如果等 process() 里才置位，会出现“已取出但尚未标记”的窗口而被误判为空闲
+                    busy = true
+                    try {
+                        process(event)
+                    } finally {
+                        busy = false
+                    }
+                }
             }
             drainRemaining()
         } catch (t: Throwable) {
@@ -225,7 +234,6 @@ object PlaybackPipeline {
     }
 
     private fun process(event: Event) {
-        busy = true
         try {
             handle(event)
         } finally {
@@ -313,4 +321,8 @@ object PlaybackPipeline {
         }
         return !busy && queue.isEmpty()
     }
+
+    /** 测试诊断：卡住时把当前状态带进断言信息 */
+    internal fun stateForTesting(): String =
+        "busy=" + busy + " queue=" + queue.size + " running=" + running + " err=" + (lastError ?: "-")
 }

@@ -40,6 +40,10 @@ object StatsStore {
 
     private var dataDir: File? = null
     private var loaded = false
+
+    /** 启动预热是否已完成（面板打开前判断用） */
+    @Volatile
+    private var prefetchDone = false
     private var replayedLines = 0
 
     /** 写线程（插件停用后会释放，重新启用时重建） */
@@ -1040,6 +1044,25 @@ object StatsStore {
         } catch (t: Throwable) {
             System.err.println("[listen-stats] 预热缓存失败: " + t.message)
         }
+        // 无论成败都置位：否则打开面板的等待会白等满超时
+        prefetchDone = true
+    }
+
+    /** 预热是否已完成（面板打开前判断用） */
+    fun isPrefetchDone(): Boolean = prefetchDone
+
+    /** 等预热完成，最多 timeoutMs；返回是否已完成 */
+    fun awaitPrefetch(timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (prefetchDone) return true
+            try {
+                Thread.sleep(20L)
+            } catch (t: InterruptedException) {
+                return prefetchDone
+            }
+        }
+        return prefetchDone
     }
 
     /** 列表里是否跳过这首：开了「隐藏缺失曲目」且这首确实缺失 */

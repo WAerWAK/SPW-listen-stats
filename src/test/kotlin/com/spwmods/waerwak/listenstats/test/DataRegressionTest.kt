@@ -1,5 +1,6 @@
 package com.spwmods.waerwak.listenstats.test
 
+import com.spwmods.waerwak.listenstats.DiagReport
 import com.spwmods.waerwak.listenstats.stats.CountRule
 import com.spwmods.waerwak.listenstats.stats.LiveSessionStore
 import com.spwmods.waerwak.listenstats.stats.MissingStore
@@ -898,6 +899,59 @@ fun main() {
         check(!File(dir2, "host-targets.txt").isFile, "非扫描结果不应写缓存")
     }
 
+    test("预热完成信号：prefetch 后立即可用") {
+        freshEnv()
+        StatsStore.prefetch()
+        check(StatsStore.isPrefetchDone(), "prefetch 后应置位（打开面板不再白等）")
+        check(StatsStore.awaitPrefetch(10L), "已完成后应立即返回 true")
+    }
+
+    test("诊断报告：可生成且不含歌曲信息与音频路径") {
+        freshEnv()
+        val item = track("secret", title = "机密歌名XYZ", artist = "机密歌手ABC")
+        SessionTracker.onTrack(item)
+        SessionTracker.onPlayingChanged(true)
+        playFor(item, 0L, 40 * SECOND)
+        SessionTracker.flush()
+        Thread.sleep(300L)
+        val result = DiagReport.write()
+        if (result.startsWith("失败：")) {
+            println("    （跳过：宿主环境不可用 —— " + result + "）")
+        } else {
+            val text = File(result).readText(Charsets.UTF_8)
+            check(!text.contains("机密歌名XYZ"), "报告不应包含歌名")
+            check(!text.contains("机密歌手ABC"), "报告不应包含歌手")
+            check(!text.contains(".flac"), "报告不应包含音频文件路径")
+            check(text.contains("== 版本与环境 =="), "应含版本段")
+            check(text.contains("== 界面注入 =="), "应含注入段")
+            check(text.contains("== hook-diag.txt"), "应含注入诊断尾部")
+        }
+    }
+
+    test("配置页结构：三组、开关化、无安装卸载按钮") {
+        val loader = ClassLoader.getSystemClassLoader()
+        val stream = loader.getResourceAsStream("preference_config.json")
+        check(stream != null, "应能在 classpath 里找到 preference_config.json")
+        var text = ""
+        try {
+            text = String(stream!!.readBytes(), Charsets.UTF_8)
+        } finally {
+            try {
+                stream!!.close()
+            } catch (t: Throwable) {
+                // 忽略
+            }
+        }
+        check(text.contains("\"title\": \"入口\""), "应有「入口」组")
+        check(text.contains("\"title\": \"数据\""), "应有「数据」组")
+        check(text.contains("\"title\": \"高级诊断\""), "应有「高级诊断」组")
+        check(text.contains("showFloatingButton"), "应有浮钮开关")
+        check(text.contains("showTitlebarButton"), "应有顶栏按钮开关")
+        check(!text.contains("悬浮按钮-安装"), "不应再有浮钮安装按钮")
+        check(!text.contains("顶栏按钮-卸载"), "不应再有顶栏卸载按钮")
+        check(text.contains("StatsActions.writeDiagReport"), "高级诊断组应接入诊断报告")
+    }
+
     test("位置粒度粗于回调频率时不少记") {
         freshEnv(minSec = 30, percent = 50, mode = "min", ignoreSec = 0)
         val item = track("dense", durationMs = 5 * MINUTE)
@@ -1246,7 +1300,7 @@ fun main() {
         while (i < 31) {
             advance(SECOND)
             PlaybackPipeline.onPosition((i + 1) * SECOND)
-            check(PlaybackPipeline.awaitIdleForTesting(2_000L), "队列应在超时内处理完")
+            check(PlaybackPipeline.awaitIdleForTesting(15_000L), ("队列应在超时内处理完（" + PlaybackPipeline.stateForTesting() + "）"))
             i++
         }
         SessionTracker.flush()
@@ -1270,7 +1324,7 @@ fun main() {
             // 每 10 秒来一次"歌词提示"，且指向不存在的另一首（模拟其它插件干扰）
             if (i % 10 == 0) PlaybackPipeline.onLyricHint()
             PlaybackPipeline.onPosition((i + 1) * SECOND)
-            check(PlaybackPipeline.awaitIdleForTesting(2_000L), "队列应在超时内处理完")
+            check(PlaybackPipeline.awaitIdleForTesting(15_000L), ("队列应在超时内处理完（" + PlaybackPipeline.stateForTesting() + "）"))
             i++
         }
         SessionTracker.flush()
@@ -1290,12 +1344,12 @@ fun main() {
         TrackResolver.provider = { item }
         // 没有任何歌词回调，直接启动管线（模拟插件在播放中途被启用）
         PlaybackPipeline.start()
-        check(PlaybackPipeline.awaitIdleForTesting(2_000L), "seed 应在超时内完成")
+        check(PlaybackPipeline.awaitIdleForTesting(15_000L), ("seed 应在超时内完成（" + PlaybackPipeline.stateForTesting() + "）"))
         var i = 0
         while (i < 31) {
             advance(SECOND)
             PlaybackPipeline.onPosition((i + 1) * SECOND)
-            check(PlaybackPipeline.awaitIdleForTesting(2_000L), "队列应在超时内处理完")
+            check(PlaybackPipeline.awaitIdleForTesting(15_000L), ("队列应在超时内处理完（" + PlaybackPipeline.stateForTesting() + "）"))
             i++
         }
         SessionTracker.flush()

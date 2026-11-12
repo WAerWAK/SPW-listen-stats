@@ -2,14 +2,15 @@
 
 package com.spwmods.waerwak.listenstats.stats
 
-import com.xuncorp.spw.workshop.api.WorkshopApi
-import com.xuncorp.spw.workshop.api.config.ConfigHelper
+import com.spwmods.waerwak.listenstats.stats.PluginConfig
 
 /**
  * 存储策略配置
  *
  * 原始事件明细（events 目录下的每日文件，精确到次）只保留最近 N 天；
  * 聚合数据（daily 目录下的按月文件 + tracks.jsonl 曲目字典）永久保留。
+ *
+ * 1.5.1.3 起 config.json 的读写统一走 [PluginConfig]（先 reload 再改再存）。
  */
 object StorageRule {
 
@@ -22,12 +23,6 @@ object StorageRule {
     var rawEventKeepDays: Int = 90
         private set
 
-    private fun helper(): ConfigHelper? = try {
-        WorkshopApi.manager.createConfigManager().getConfig("config.json")
-    } catch (t: Throwable) {
-        null
-    }
-
     /**
      * 读取配置
      *
@@ -36,27 +31,14 @@ object StorageRule {
      */
     @Synchronized
     fun load() {
-        try {
-            val h = helper() ?: return
-            h.reload()
-            rawEventKeepDays =
-                ((h.get(KEY_RAW_KEEP_DAYS, 90) as? Number)?.toInt() ?: 90)
-                    .coerceIn(LIMIT_MIN_DAYS, LIMIT_MAX_DAYS)
-        } catch (t: Throwable) {
-            // 读失败用默认值
-        }
+        if (!PluginConfig.isAvailable()) return
+        rawEventKeepDays = PluginConfig.getInt(KEY_RAW_KEEP_DAYS, 90, LIMIT_MIN_DAYS, LIMIT_MAX_DAYS)
     }
 
     @Synchronized
     fun save(days: Int) {
         rawEventKeepDays = days.coerceIn(LIMIT_MIN_DAYS, LIMIT_MAX_DAYS)
-        try {
-            val h = helper() ?: return
-            h.set(KEY_RAW_KEEP_DAYS, rawEventKeepDays)
-            h.save()
-        } catch (t: Throwable) {
-            // 写失败保持内存值
-        }
+        PluginConfig.edit { h -> h.set(KEY_RAW_KEEP_DAYS, rawEventKeepDays) }
     }
 
     fun describe(): String {
