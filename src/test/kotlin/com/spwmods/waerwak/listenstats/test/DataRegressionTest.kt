@@ -663,6 +663,15 @@ fun main() {
             check(discovered.layer != null, "应能发现材质 Layer 位点")
             check(t.titlebarAvailable, "1.19.3 应能发现标题栏入口")
             check(t.warnings.isEmpty(), "1.19.3 不应有降级警告：" + t.warnings)
+            val sidebar = t.sidebar
+            check(sidebar != null, "1.19.3 应能发现左侧栏入口（可选组）")
+            if (sidebar != null) {
+                check(sidebar.entry.target.name.isNotEmpty(), "侧栏入口目标不应为空")
+                check(sidebar.entry.caller.isNotEmpty(), "侧栏入口调用点不应为空")
+                check(sidebar.row.parameterTypes().size == 11, "侧栏行应为 11 参")
+                check(sidebar.routeGetter.parameterTypes().isEmpty(), "route getter 应为零参")
+                check(sidebar.style != null, "应能发现侧栏样式 Provider 调用点")
+            }
             check(elapsed < 30_000L, "扫描耗时过长：" + elapsed + "ms")
             println("    （扫描 " + index.methods.size + " 个方法，用时 " + elapsed + "ms）")
         }
@@ -750,7 +759,7 @@ fun main() {
         check(hasTitlebarWarning, "应记录标题栏降级原因：" + discovered.targets.warnings)
     }
 
-    test("注入点缓存 format 3：标题栏降级可读，旧格式被拒") {
+    test("注入点缓存 format 4：标题栏降级可读，旧格式被拒") {
         val dir = File(
             System.getProperty("java.io.tmpdir"),
             "spw-listenstats-cache-" + System.nanoTime()
@@ -758,7 +767,7 @@ fun main() {
         dir.mkdirs()
         val file = File(dir, "host-targets.txt")
         val text = StringBuilder()
-        text.append("format=3\n")
+        text.append("format=4\n")
         text.append("plugin=9.9.9\n")
         text.append("path=/host.jar\n")
         text.append("sha256=-\n")
@@ -781,7 +790,7 @@ fun main() {
         check(!read.targets.titlebarAvailable, "caption=none 应解析为标题栏降级")
         check(read.targets.warnings.isNotEmpty(), "降级应带 warning")
 
-        file.writeText(text.toString().replace("format=3", "format=2"), Charsets.UTF_8)
+        file.writeText(text.toString().replace("format=4", "format=3"), Charsets.UTF_8)
         check(
             HostTargetResolver.readCache(dir, "9.9.9", "/host.jar", null) == null,
             "format 2 缓存应被拒绝"
@@ -794,7 +803,7 @@ fun main() {
         )
     }
 
-    test("注入点缓存 format 3：caption.control 只有 3 段也能命中") {
+    test("注入点缓存 format 4：caption.control 只有 3 段也能命中") {
         val dir = File(
             System.getProperty("java.io.tmpdir"),
             "spw-listenstats-cache-full-" + System.nanoTime()
@@ -802,7 +811,7 @@ fun main() {
         dir.mkdirs()
         val file = File(dir, "host-targets.txt")
         val text = StringBuilder()
-        text.append("format=3\n")
+        text.append("format=4\n")
         text.append("plugin=1.5.1.1\n")
         text.append("path=/host.jar\n")
         text.append("sha256=-\n")

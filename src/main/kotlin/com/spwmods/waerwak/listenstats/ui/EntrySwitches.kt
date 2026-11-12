@@ -12,7 +12,7 @@ import java.io.File
 import java.util.function.Consumer
 
 /**
- * 入口开关（宿主配置页的两个 switch）
+ * 入口开关（宿主配置页的三个 switch）
  *
  * 宿主配置页保存走的是它自己那份 ConfigHelper，插件拿不到"刚保存"的通知，
  * 所以这里用两条路一起保证"改完立刻生效"：
@@ -22,6 +22,9 @@ import java.util.function.Consumer
  *
  * 状态统一在宿主界面线程（EDT）更新：Compose 状态只能在那里写。
  * 开关只控制"是否绘制入口"，hook 本身常驻（不因开关反复注册/卸载）。
+ *
+ * 侧栏入口与标题栏按钮互斥：侧栏可用且开启时显示侧栏，否则回落到标题栏（都不行就靠配置页入口）。
+ * 浮钮独立，不参与互斥。
  */
 @OptIn(UnstableSpwWorkshopApi::class)
 object EntrySwitches {
@@ -30,9 +33,27 @@ object EntrySwitches {
     var floating by mutableStateOf(true)
         private set
 
-    /** 标题栏按钮是否显示 */
-    var titlebar by mutableStateOf(true)
+    /** 配置里请求的标题栏按钮 */
+    var titlebarRequested by mutableStateOf(true)
         private set
+
+    /** 配置里请求的左侧栏入口 */
+    var sidebarRequested by mutableStateOf(false)
+        private set
+
+    /** 标题栏入口 hook 是否已装上 */
+    var titlebarReady by mutableStateOf(true)
+        private set
+
+    /** 侧栏入口 hook 是否已装上 */
+    var sidebarReady by mutableStateOf(false)
+        private set
+
+    /** 实际是否显示左侧栏入口 */
+    val showSidebar: Boolean get() = sidebarReady && sidebarRequested
+
+    /** 实际是否显示标题栏按钮（侧栏可用时让位） */
+    val showTitlebar: Boolean get() = titlebarReady && titlebarRequested && !showSidebar
 
     @Volatile
     private var alive = false
@@ -71,28 +92,40 @@ object EntrySwitches {
         unregisterListener()
     }
 
+    /** 侧栏入口装/卸后同步能力标志（EDT 调用） */
+    fun markSidebarReady(ready: Boolean) {
+        if (sidebarReady != ready) sidebarReady = ready
+    }
+
+    fun markTitlebarReady(ready: Boolean) {
+        if (titlebarReady != ready) titlebarReady = ready
+    }
+
     /** 读一次配置并投递到 EDT（配置读取在调用线程：轮询线程/监听回调线程） */
     private fun refresh() {
         val nextFloating = PluginConfig.getBoolean(PluginConfig.SHOW_FLOATING_BUTTON, true)
         val nextTitlebar = PluginConfig.getBoolean(PluginConfig.SHOW_TITLEBAR_BUTTON, true)
-        val changed = floating != nextFloating || titlebar != nextTitlebar
-        if (changed) logChange(nextFloating, nextTitlebar)
+        val nextSidebar = PluginConfig.getBoolean(PluginConfig.SHOW_SIDEBAR_ENTRY, false)
+        val changed = floating != nextFloating || titlebarRequested != nextTitlebar ||
+            sidebarRequested != nextSidebar
+        if (changed) logChange(nextFloating, nextTitlebar, nextSidebar)
         EventQueue.invokeLater(object : Runnable {
             override fun run() {
                 if (!alive) return
                 if (floating != nextFloating) floating = nextFloating
-                if (titlebar != nextTitlebar) titlebar = nextTitlebar
+                if (titlebarRequested != nextTitlebar) titlebarRequested = nextTitlebar
+                if (sidebarRequested != nextSidebar) sidebarRequested = nextSidebar
             }
         })
     }
 
     /** 开关变化时往 hook-diag 记一行（排查“改了没反应”用，不刷屏） */
-    private fun logChange(floatingOn: Boolean, titlebarOn: Boolean) {
+    private fun logChange(floatingOn: Boolean, titlebarOn: Boolean, sidebarOn: Boolean) {
         try {
             val dir = com.spwmods.waerwak.listenstats.stats.StatsStore.dataDirOrNull() ?: return
             com.spwmods.waerwak.listenstats.stats.LogFiles.append(
                 File(dir, "hook-diag.txt"),
-                "entry  floating=" + floatingOn + " titlebar=" + titlebarOn + "\n"
+                "entry  floating=" + floatingOn + " titlebar=" + titlebarOn + " sidebar=" + sidebarOn + "\n"
             )
         } catch (t: Throwable) {
             // 诊断写不进去不影响功能
@@ -135,8 +168,11 @@ object EntrySwitches {
     private fun migrateLegacyEntryState() {
         try {
             if (UiStateStore.loadEntryEnabled()) return
-            if (PluginConfig.contains(PluginConfig.SHOW_FLOATING_BUTTON)) return
-            PluginConfig.setBoolean(PluginConfig.SHOW_FLOATING_BUTTON, false)
+            if (!PluginConfig.contains(PluginConfig.SHOW_FLOATING_BUTTON)) {
+                PluginConfig.setBoolean(PluginConfig.SHOW_FLOATING_BUTTON, false)
+            }
+            // 迁移只做一次：把旧值置回 true，否则下次启动会又把用户后来改的新值覆盖掉
+            UiStateStore.saveEntryEnabled(true)
         } catch (t: Throwable) {
             // 迁移失败按默认值处理
         }

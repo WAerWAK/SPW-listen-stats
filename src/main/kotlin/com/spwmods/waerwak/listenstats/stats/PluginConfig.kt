@@ -29,6 +29,9 @@ object PluginConfig {
     /** 标题栏按钮是否显示（宿主配置页 switch） */
     const val SHOW_TITLEBAR_BUTTON = "showTitlebarButton"
 
+    /** 左侧栏入口是否显示（宿主配置页 switch，默认关） */
+    const val SHOW_SIDEBAR_ENTRY = "showSidebarEntry"
+
     @Volatile
     private var helper: ConfigHelper? = null
 
@@ -95,14 +98,19 @@ object PluginConfig {
         }
     }
 
-    /** 键是否存在（旧配置迁移用：不能把"用户没设过"当成"用户设成默认值"） */
+    /** 键是否存在（旧配置迁移用）
+     *
+     * 不用 `get(key, null)` 判断：ConfigHelper 对缺失键的语义不确定（可能返回默认值也可能抛异常），
+     * 这里直接读 config.json 文本找键名，最简单也最可靠。
+     */
     @Synchronized
     fun contains(key: String): Boolean {
         val h = config() ?: return false
         return try {
-            h.reload()
-            val probe: Any? = h.get<Any?>(key, null)
-            probe != null
+            val path = h.getConfigPath()
+            if (!java.nio.file.Files.isRegularFile(path)) return false
+            val text = java.nio.file.Files.readString(path, Charsets.UTF_8)
+            text.contains("\"" + key + "\"")
         } catch (t: Throwable) {
             false
         }

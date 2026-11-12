@@ -483,6 +483,31 @@ object OverlayInjection {
             }
             lastError = null
             val warnings = uiTargets.warnings
+            // 左侧栏入口（可选组：宿主结构不支持或注册失败都只降级，不影响其它入口）
+            var sidebarError: String? = null
+            val sidebarTargets = uiTargets.sidebar
+            if (sidebarTargets != null) {
+                try {
+                    val sidebarHandle = com.spwmods.waerwak.listenstats.ui.SidebarEntry.register(
+                        sidebarTargets
+                    )
+                    if (sidebarHandle != null) {
+                        handles += sidebarHandle
+                    } else {
+                        sidebarError = com.spwmods.waerwak.listenstats.ui.SidebarEntry.statusText()
+                    }
+                } catch (t: Throwable) {
+                    if (com.spwmods.waerwak.listenstats.ui.HookFailurePolicy.noRetry(t)) throw t
+                    if (t is com.spwmods.waerwak.listenstats.ui.HookRegistrationFailure) {
+                        if (!t.rollbackComplete) throw t
+                        sidebarError = t.message
+                    } else {
+                        sidebarError = t.javaClass.simpleName + "：" + (t.message ?: "")
+                    }
+                }
+            } else {
+                sidebarError = "宿主结构不支持侧栏入口"
+            }
             if (titlebarError != null || navError != null || warnings.isNotEmpty()) {
                 writeDiag(
                     "install-partial",
@@ -501,6 +526,7 @@ object OverlayInjection {
                     " nav=" + (navError == null) +
                     " titlebar=" + (titlebarError == null) +
                     " titlebarErr=" + (titlebarError ?: "-") +
+                    " sidebar=" + (sidebarError ?: "ok") +
                     " warnings=" + warnings.size +
                     " via=" + resolved.source +
                     " ms=" + ((System.nanoTime() - startedAt) / 1_000_000L)

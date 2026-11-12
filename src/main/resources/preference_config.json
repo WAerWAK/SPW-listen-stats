@@ -22,8 +22,15 @@
           "key": "showTitlebarButton",
           "type": "switch",
           "title": "显示标题栏按钮",
-          "summary": "标题栏右侧的统计入口按钮。默认开启；关闭后仍可用悬浮圆钮或本页入口打开，保存后立即生效",
+          "summary": "标题栏右侧的统计入口按钮。默认开启；开启左侧栏入口时会让位给侧栏，保存后立即生效",
           "default_value": true
+        },
+        {
+          "key": "showSidebarEntry",
+          "type": "switch",
+          "title": "在左侧栏显示统计入口",
+          "summary": "开启后在「音乐库」下方的扩展区显示「统计」，并把顶部图标让位给侧栏；宿主结构不支持时自动使用标题栏入口。默认关闭",
+          "default_value": false
         }
       ]
     },

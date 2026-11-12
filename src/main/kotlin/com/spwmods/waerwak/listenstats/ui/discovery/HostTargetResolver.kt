@@ -1,6 +1,7 @@
 package com.spwmods.waerwak.listenstats.ui.discovery
 
 import com.spwmods.waerwak.listenstats.stats.StatsStore
+import com.spwmods.waerwak.listenstats.ui.HostSidebarDiscovery
 import com.spwmods.waerwak.listenstats.ui.HostUiTargets
 import java.io.File
 import java.nio.file.Files
@@ -36,8 +37,9 @@ object HostTargetResolver {
      * 缓存格式版本
      *
      * 2 → 3：标题栏成为可选组（发现失败时写 `caption.*=none`），旧缓存一律失效重扫。
+     * 3 → 4：新增左侧栏入口（`sidebar.*` 四行）。
      */
-    private const val FORMAT = 3
+    private const val FORMAT = 4
 
     private var memory: ResolvedHostTargets? = null
     private var memoryVersion: String = ""
@@ -210,6 +212,20 @@ object HostTargetResolver {
         if (content == null) {
             warnings.add("material: 找不到内层材质点，背景将回退为不透明")
         }
+        // 左侧栏（可选组；缺行就当作不可用）
+        val sidebarEntry = parseMethod(map["sidebar.entry"])
+        val sidebarRow = parseMethod(map["sidebar.row"])
+        val sidebarGetter = parseMethod(map["sidebar.getter"])
+        val sidebarStyle = parseMethod(map["sidebar.style"])
+        var sidebar: com.spwmods.waerwak.listenstats.ui.HostSidebarTargets? = null
+        if (sidebarEntry != null && sidebarRow != null && sidebarGetter != null) {
+            sidebar = com.spwmods.waerwak.listenstats.ui.HostSidebarTargets(
+                HostLayerSite(sidebarEntry.method, sidebarEntry.caller),
+                sidebarRow.method,
+                sidebarGetter.method,
+                if (sidebarStyle == null) null else HostLayerSite(sidebarStyle.method, sidebarStyle.caller)
+            )
+        }
         val caption = entry
         val captionControl = control
         val targets = HostUiTargets(
@@ -225,7 +241,8 @@ object HostTargetResolver {
             contentDescriptor = if (content == null) "" else content.target.descriptor,
             contentCaller = if (content == null) "" else content.caller.replace('/', '.'),
             titlebarAvailable = titlebarAvailable,
-            warnings = warnings
+            warnings = warnings,
+            sidebar = sidebar
         )
         return DiscoveredUiTargets(targets, layer, content)
     }
@@ -293,6 +310,23 @@ object HostTargetResolver {
         } else {
             sb.append("content=").append(content.target.owner).append('|').append(content.target.name).append('|')
                 .append(content.target.descriptor).append('|').append(content.caller).append('\n')
+        }
+        // 左侧栏（可选组；不可用时不写行，读取端按缺行处理）
+        val sidebar = t.sidebar
+        if (sidebar != null) {
+            sb.append("sidebar.entry=").append(sidebar.entry.target.owner).append('|')
+                .append(sidebar.entry.target.name).append('|').append(sidebar.entry.target.descriptor)
+                .append('|').append(sidebar.entry.caller).append('\n')
+            sb.append("sidebar.row=").append(sidebar.row.owner).append('|')
+                .append(sidebar.row.name).append('|').append(sidebar.row.descriptor).append('\n')
+            sb.append("sidebar.getter=").append(sidebar.routeGetter.owner).append('|')
+                .append(sidebar.routeGetter.name).append('|').append(sidebar.routeGetter.descriptor).append('\n')
+            val style = sidebar.style
+            if (style != null) {
+                sb.append("sidebar.style=").append(style.target.owner).append('|')
+                    .append(style.target.name).append('|').append(style.target.descriptor)
+                    .append('|').append(style.caller).append('\n')
+            }
         }
         val tmp = File(file.parentFile, CACHE_FILE + ".tmp")
         try {

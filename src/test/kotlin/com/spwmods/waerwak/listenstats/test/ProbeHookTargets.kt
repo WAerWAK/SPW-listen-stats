@@ -1,6 +1,7 @@
 package com.spwmods.waerwak.listenstats.test
 
 import com.spwmods.waerwak.listenstats.ui.HostUiTargets
+import com.spwmods.waerwak.listenstats.ui.HostSidebarDiscovery
 import com.spwmods.waerwak.listenstats.ui.discovery.HostBytecodeIndex
 import com.spwmods.waerwak.listenstats.ui.discovery.HostUiDiscovery
 import java.io.File
@@ -31,6 +32,18 @@ fun main(args: Array<String>) {
         val elapsed = System.currentTimeMillis() - started
         val t = discovered.targets
         println("扫描完成：" + index.methods.size + " 个方法，用时 " + elapsed + " ms")
+        val sidebar = t.sidebar
+        if (sidebar == null) {
+            val traced = HostSidebarDiscovery.discoverTraced(index)
+            println("  sidebar         = （未发现：" + traced.second + "）")
+        } else {
+            println("  sidebar.entry   = " + sidebar.entry.target.dottedOwner() + "." + sidebar.entry.target.name +
+                "  inClass=" + sidebar.entry.caller.replace('/', '.'))
+            println("  sidebar.row     = " + sidebar.row.dottedOwner() + "." + sidebar.row.name)
+            println("  sidebar.getter  = " + sidebar.routeGetter.dottedOwner() + "." + sidebar.routeGetter.name)
+            val style = sidebar.style
+            println("  sidebar.style   = " + if (style == null) "（无，不做选中态抑制）" else style.target.dottedOwner() + "." + style.target.name)
+        }
         println("  pageCaller      = " + t.pageCaller)
         println("  titlebarCaller  = " + t.titlebarCaller)
         println("  debugCaption    = " + t.debugCaption + "  (method " + t.debugCaptionMethod + ")")

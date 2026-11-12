@@ -159,9 +159,11 @@ object TitlebarButton {
             // 释放失败直接抛给 HookHandles：句柄会被保留，调用方据此拒绝再装
             hookHandle.unhook()
             if (installation === box) installation = null
+            EntrySwitches.markTitlebarReady(false)
         }
         box = session
         installation = session
+        EntrySwitches.markTitlebarReady(true)
         return session
     }
 
@@ -177,7 +179,7 @@ object TitlebarButton {
     @Composable
     private fun TitlebarEntry() {
         // 入口开关（宿主配置页 switch）：hook 常驻，关掉只不绘制
-        if (!EntrySwitches.titlebar) return
+        if (!EntrySwitches.showTitlebar) return
         val t = targets
         if (t == null || !t.reuseHostCaption) {
             FallbackEntry()

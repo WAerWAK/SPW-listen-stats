@@ -75,23 +75,46 @@ internal fun InfoTab(
                     GroupHeader("提示")
                     Column(Modifier.padding(vertical = 6.dp)) {
                         Text(
-                            "以下操作需在「模组管理 → 听歌统计」中完成：",
+                            "以下操作在「模组管理 → 听歌统计」中完成：",
                             fontSize = SaltDesign.fontSizeSub,
                             color = p.subText
                         )
-                        Spacer(Modifier.height(6.dp))
+                        Spacer(Modifier.height(8.dp))
+                        // 直达宿主配置页（不用自己回模组列表找）
+                        SmallButton("打开插件配置", true) {
+                            OverlayInjection.closePanel()
+                            java.awt.EventQueue.invokeLater(object : Runnable {
+                                override fun run() {
+                                    val error =
+                                        com.spwmods.waerwak.listenstats.ui.HostConfigRoute.openConfig(snap.pluginId)
+                                    if (error != null) toast("打开配置失败：" + error, false)
+                                }
+                            })
+                        }
+                        Spacer(Modifier.height(8.dp))
                         Text("· 导出 CSV / 备份数据 / 恢复数据 / 清空统计", fontSize = SaltDesign.fontSizeSub, color = p.text)
                         Spacer(Modifier.height(2.dp))
-                        Text("· 悬浮按钮的安装与卸载", fontSize = SaltDesign.fontSizeSub, color = p.text)
+                        Text("· 悬浮圆钮 / 标题栏按钮 / 左侧栏入口 的显示开关", fontSize = SaltDesign.fontSizeSub, color = p.text)
                         Spacer(Modifier.height(2.dp))
-                        Text("· 顶栏按钮的安装与卸载", fontSize = SaltDesign.fontSizeSub, color = p.text)
-                        Spacer(Modifier.height(6.dp))
+                        Text("· 写入诊断报告", fontSize = SaltDesign.fontSizeSub, color = p.text)
+                        Spacer(Modifier.height(10.dp))
                         Text(
                             "打开统计页的全局快捷键需在「设置 → 键盘快捷键」中绑定（默认未绑定）",
                             fontSize = SaltDesign.fontSizeSub,
                             color = p.text
                         )
-                        Spacer(Modifier.height(6.dp))
+                        Spacer(Modifier.height(8.dp))
+                        SmallButton("打开键盘快捷键", true) {
+                            OverlayInjection.closePanel()
+                            java.awt.EventQueue.invokeLater(object : Runnable {
+                                override fun run() {
+                                    val error = com.spwmods.waerwak.listenstats.ui.HostConfigRoute
+                                        .openKeyboardShortcut()
+                                    if (error != null) toast("打开快捷键设置失败：" + error, false)
+                                }
+                            })
+                        }
+                        Spacer(Modifier.height(8.dp))
                         Text(
                             "不计数的播放、缺失曲目检测、明细保留天数、字体大小可在本页调整",
                             fontSize = SaltDesign.fontSizeSub,
@@ -122,18 +145,6 @@ internal fun InfoTab(
                     LinkRow("GitHub", "WAerWAK/SPW-listen-stats") { openUrl(REPO_URL) }
                     RowDivider()
                     LinkRow("Steam 创意工坊", "听歌统计 · 3822834646") { openUrl(WORKSHOP_URL) }
-                    RowDivider()
-                    // 直达宿主「模组管理 → 听歌统计」配置页（不另造窗口）
-                    LinkRow("插件配置", "打开设置") {
-                        OverlayInjection.closePanel()
-                        java.awt.EventQueue.invokeLater(object : Runnable {
-                            override fun run() {
-                                val error =
-                                    com.spwmods.waerwak.listenstats.ui.HostConfigRoute.open(snap.pluginId)
-                                if (error != null) toast("打开配置失败：" + error, false)
-                            }
-                        })
-                    }
                 }
             }
             Column(Modifier.weight(1f)) {

@@ -50,6 +50,9 @@ object NavigationHook {
         navigatorRef = java.lang.ref.WeakReference(value)
     }
 
+    /** 供面板组合时从宿主 LocalNavigator 注入实例（比 hook 捕获更早、更可靠） */
+    internal fun rememberNavigatorFromHost(value: Any?) = rememberNavigator(value)
+
     @Volatile
     var lastError: String? = null
         private set

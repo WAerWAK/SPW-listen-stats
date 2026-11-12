@@ -57,7 +57,9 @@ data class HostUiTargets(
      */
     val titlebarAvailable: Boolean = true,
     /** 可选组降级原因（写进 hook-diag / 信息页 / 诊断报告，不参与任何判定） */
-    val warnings: List<String> = ArrayList()
+    val warnings: List<String> = ArrayList(),
+    /** 左侧栏入口（可选组；发现失败为 null） */
+    val sidebar: HostSidebarTargets? = null
 ) {
     companion object {
 

@@ -1,5 +1,6 @@
 package com.spwmods.waerwak.listenstats.ui.discovery
 
+import com.spwmods.waerwak.listenstats.ui.HostSidebarDiscovery
 import com.spwmods.waerwak.listenstats.ui.HostUiTargets
 
 /**
@@ -96,6 +97,8 @@ object HostUiDiscovery {
         if (content == null) {
             warnings.add("material: 找不到内层材质点，背景将回退为不透明")
         }
+        // 侧栏入口是可选组：失败不进 warnings（默认不开启，不应影响缓存完整性）
+        val sidebar = HostSidebarDiscovery.discover(index)
 
         val control = captionControl
         val template = captionTemplate
@@ -114,7 +117,8 @@ object HostUiDiscovery {
             contentDescriptor = if (content == null) "" else content.target.descriptor,
             contentCaller = if (content == null) "" else content.caller.replace('/', '.'),
             titlebarAvailable = titlebarAvailable,
-            warnings = warnings
+            warnings = warnings,
+            sidebar = sidebar
         )
         return DiscoveredUiTargets(targets, layer, content)
     }

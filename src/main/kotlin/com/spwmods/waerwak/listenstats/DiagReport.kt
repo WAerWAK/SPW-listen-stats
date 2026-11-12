@@ -81,7 +81,10 @@ object DiagReport {
         sb.append("窗口样式        : ").append(HostAppearance.lastStyleName).append('\n')
         sb.append("宿主导航已就绪  : ").append(NavigationHook.navigatorOrNull() != null).append('\n')
         sb.append("浮钮 / 顶栏开关 : ").append(EntrySwitches.floating)
-            .append(" / ").append(EntrySwitches.titlebar).append('\n')
+            .append(" / ").append(EntrySwitches.showTitlebar).append('\n')
+        sb.append("侧栏入口        : ").append(EntrySwitches.showSidebar)
+            .append("（请求 ").append(EntrySwitches.sidebarRequested)
+            .append(" / 可用 ").append(EntrySwitches.sidebarReady).append("）\n")
         sb.append('\n')
 
         sb.append("== 采集与数据 ==\n")

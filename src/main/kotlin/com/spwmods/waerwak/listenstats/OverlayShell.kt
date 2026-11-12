@@ -79,12 +79,27 @@ import java.time.LocalDate
 
 internal val TABS = arrayOf("概览", "排行", "活跃度", "信息")
 
+/**
+ * 从宿主 LocalNavigator 捕获 Navigator 实例
+ *
+ * 只依赖宿主未混淆的顶层属性 getter（AppNavigationKt.getLocalNavigator），
+ * 拿不到就保持 null（入口会提示“导航尚未就绪”，不崩）。
+ */
+@Composable
+private fun CaptureHostNavigator() {
+    val local = com.spwmods.waerwak.listenstats.ui.HostConfigRoute.navigatorLocal() ?: return
+    val navigator = local.current
+    com.spwmods.waerwak.listenstats.ui.NavigationHook.rememberNavigatorFromHost(navigator)
+}
+
 
 
 @Composable
 internal fun OverlayHost() {
     var hovered by remember { mutableStateOf(false) }
     val opened = OverlayInjection.panelOpen.value
+    // 先把宿主 Navigator 实例拿回来：面板里的“插件配置 / 键盘快捷键”入口靠它跳转
+    CaptureHostNavigator()
 
     // 关闭面板（含浮钮状态与全局弹层复位）
     val closePanel: () -> Unit = {

@@ -7,9 +7,8 @@ plugins {
 }
 
 group = "com.spwmods.waerwak.listenstats"
-// 1.5.2：句柄所有权/可选组降级、注入会话代数与 EDT 注册、配置层统一与分组开关、
-// 面板直达配置页、打开前预读、一键脱敏诊断报告（阶段 1–6 合并交付）
-version = "1.5.2"
+// 1.5.2.1：开发版（修复配置页/快捷键页跳转与 Navigator 获取；新增左侧栏入口）
+version = "1.5.2.1"
 
 val pluginId = "com.spwmods.waerwak.listenstats"
 val pluginVersion = version.toString()
