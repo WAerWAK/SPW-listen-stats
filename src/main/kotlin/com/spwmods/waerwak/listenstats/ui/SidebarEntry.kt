@@ -76,6 +76,13 @@ object SidebarEntry {
     @Volatile
     private var renderErrorReported = false
 
+    @Volatile
+    private var traceReported = false
+
+    private val tracedRoutes = ArrayList<String>(8)
+
+    @Volatile
+    private var drawnReported = false
     val installed: Boolean get() = installation != null
 
     fun statusText(): String {
@@ -162,6 +169,7 @@ object SidebarEntry {
             routeGetter = null
             selection = null
             EntrySwitches.markSidebarReady(false)
+            EntrySwitches.markSidebarShown(false)
         }
         box = session
         installation = session
@@ -176,8 +184,13 @@ object SidebarEntry {
     }
 
     /** 宿主侧栏行（11 参） */
-    private fun resolveRow(key: HostMethod): Method = resolveMethod(key)
+    private fun resolveRow(key: HostMethod): Method {
+        val method = resolveMethod(key)
+        if (!JvmModifier.isStatic(method.modifiers)) error("侧栏行不是静态方法")
+        return method
+    }
 
+    /** 反射取方法（不限定静态：route getter 是实例方法） */
     private fun resolveMethod(key: HostMethod): Method {
         val loader = SidebarEntry::class.java.classLoader
         val owner = Class.forName(key.dottedOwner(), false, loader)
@@ -190,7 +203,6 @@ object SidebarEntry {
         }
         @Suppress("UNCHECKED_CAST")
         val method = owner.getDeclaredMethod(key.name, *types)
-        if (!JvmModifier.isStatic(method.modifiers)) error("侧栏行不是静态方法")
         method.isAccessible = true
         return method
     }
@@ -221,10 +233,45 @@ object SidebarEntry {
     /** 追加在原生行之后的插槽：只对音乐库行绘制 */
     @Composable
     private fun SidebarSlot(call: UiHookCall) {
-        if (!EntrySwitches.showSidebar) return
         val route = if (call.arguments.isEmpty()) null else call.arguments[0]
-        if (!isMusicLibrary(route)) return
+        val musicLibrary = isMusicLibrary(route)
+        trace(route, musicLibrary)
+        val shouldShow = EntrySwitches.showSidebar && musicLibrary
+        // 组合期间同步“是否真的画出来”：互斥靠这个值，避免开关开了但结构不支持时
+        // 两个入口一起消失（markSidebarShown 内部做相等判断，不会造成重组环）
+        EntrySwitches.markSidebarShown(shouldShow)
+        if (!shouldShow) return
         SidebarStatsRow()
+    }
+
+    /** 逐行诊断：按 getter 结果去重记录（route 包装类相同，必须看它返回的具体路由） */
+    @Synchronized
+    private fun trace(route: Any?, musicLibrary: Boolean) {
+        if (route == null) return
+        var getterResult = "-"
+        val getter = routeGetter
+        if (getter != null) {
+            try {
+                val value = getter.invoke(route)
+                getterResult = value?.javaClass?.name ?: "null"
+            } catch (e: Throwable) {
+                getterResult = "err:" + e.javaClass.simpleName
+            }
+        }
+        val key = getterResult
+        if (tracedRoutes.size >= 12) return
+        if (tracedRoutes.contains(key)) return
+        tracedRoutes.add(key)
+        try {
+            val dir = com.spwmods.waerwak.listenstats.stats.StatsStore.dataDirOrNull() ?: return
+            com.spwmods.waerwak.listenstats.stats.LogFiles.append(
+                File(dir, "hook-diag.txt"),
+                "sidebar  row route=" + route.javaClass.name + " getter=" + getterResult +
+                    " match=" + musicLibrary + "\n"
+            )
+        } catch (t: Throwable) {
+            // 诊断失败不影响入口
+        }
     }
 
     /** 用宿主自己的侧栏行渲染"统计"，样式/尺寸/悬停全部与原生一致 */
@@ -251,6 +298,20 @@ object SidebarEntry {
         )
         try {
             row.invoke(null, *args)
+            if (!drawnReported) {
+                drawnReported = true
+                try {
+                    val dir = com.spwmods.waerwak.listenstats.stats.StatsStore.dataDirOrNull()
+                    if (dir != null) {
+                        com.spwmods.waerwak.listenstats.stats.LogFiles.append(
+                            File(dir, "hook-diag.txt"),
+                            "sidebar  drawn active=" + active + "\n"
+                        )
+                    }
+                } catch (t: Throwable) {
+                    // 诊断失败不影响入口
+                }
+            }
         } catch (e: Throwable) {
             // 每帧都会重试：只记一次，避免刷爆 hook-diag
             if (!renderErrorReported) {

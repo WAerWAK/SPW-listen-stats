@@ -49,11 +49,20 @@ object EntrySwitches {
     var sidebarReady by mutableStateOf(false)
         private set
 
+    /**
+     * 侧栏入口是否真的绘制出来了
+     *
+     * 互斥只能基于这个值：开关打开但宿主结构不支持/hook 没触发时，
+     * 标题栏按钮必须继续显示，否则两个入口都没了。
+     */
+    var sidebarShown by mutableStateOf(false)
+        private set
+
     /** 实际是否显示左侧栏入口 */
     val showSidebar: Boolean get() = sidebarReady && sidebarRequested
 
-    /** 实际是否显示标题栏按钮（侧栏可用时让位） */
-    val showTitlebar: Boolean get() = titlebarReady && titlebarRequested && !showSidebar
+    /** 实际是否显示标题栏按钮（侧栏真的画出来了才让位） */
+    val showTitlebar: Boolean get() = titlebarReady && titlebarRequested && !sidebarShown
 
     @Volatile
     private var alive = false
@@ -99,6 +108,11 @@ object EntrySwitches {
 
     fun markTitlebarReady(ready: Boolean) {
         if (titlebarReady != ready) titlebarReady = ready
+    }
+
+    /** 侧栏行是否在组合中（由 SidebarEntry 驱动） */
+    fun markSidebarShown(shown: Boolean) {
+        if (sidebarShown != shown) sidebarShown = shown
     }
 
     /** 读一次配置并投递到 EDT（配置读取在调用线程：轮询线程/监听回调线程） */

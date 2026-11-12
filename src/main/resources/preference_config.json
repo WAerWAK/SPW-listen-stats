@@ -28,7 +28,7 @@
         {
           "key": "showSidebarEntry",
           "type": "switch",
-          "title": "在左侧栏显示统计入口",
+          "title": "显示左侧栏统计入口",
           "summary": "开启后在「音乐库」下方的扩展区显示「统计」，并把顶部图标让位给侧栏；宿主结构不支持时自动使用标题栏入口。默认关闭",
           "default_value": false
         }

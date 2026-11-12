@@ -5,7 +5,7 @@
 
 - 代码：`"ui/discovery/"` 下的 `"HostBytecodeIndex"` / `"HostUiDiscovery"` / `"HostTargetResolver"`；版本表在 `"ui/HostUiTargets.kt"`；句柄所有权在 `"ui/HookHandles.kt"`
 - 依赖：宿主自带的 `net.bytebuddy.jar.asm`（不打包、不需要新增依赖）
-- 缓存：数据目录 `"host-targets.txt"`，key = 宿主 jar 绝对路径 + SHA-256 + 插件版本，`format=3`
+- 缓存：数据目录 `"host-targets.txt"`，key = 宿主 jar 绝对路径 + SHA-256 + 插件版本，`format=4`
 - 诊断：数据目录 `hook-diag.txt`，每次注入写 `resolve source=scan|cache|table`、`install ok handles=N …warnings=N via=… ms=…`
 
 ## 0. 句柄所有权与可选组（1.5.1.1 起）
@@ -36,6 +36,23 @@
   用 `NavigationHook` 捕获的 Navigator 实例调 `navigate`；任一前提不满足就提示，不回退到自开窗口。
 - **诊断报告**：`DiagReport.write()` 写 `诊断报告-<时间戳>.txt`（版本/权限/注入态/计时异常/
   `hook-diag.txt` 与 `listen-stats.log` 尾部）；**不含**歌名/歌手/音频路径（回归测试会断言）。
+
+## 0.2 左侧栏入口（1.5.2.1，可选组）
+
+- 发现（`ui/HostSidebar.kt`，纯结构判据）：
+  1. `routeRow`：3 参 composable（route + Composer + int），方法体里同时调用原生侧栏行（11 参）与 `stringResource`；
+  2. `row`：11 参静态 composable，前 5 参 = String/boolean/Modifier/boolean/Modifier，后 4 参 = Function3/Composer/int/int；
+  3. `routeGetter`：routeRow 里对 route 参数的零参 getter（判断 MusicLibrary）；
+  4. `accessor`：routeRow 同类的公开静态包装（没有就直接用 routeRow）；
+  5. `lazyCaller`：调用 accessor 的 `Function4.invoke`（4 个 Object 参数、返回 Object）；
+  6. `style`：routeRow 同类里 `CompositionLocalProvider(ProvidedValue, Function2, Composer, int)` 的唯一调用点。
+- 注册（`ui/SidebarEntry.kt`）：`afterComposable` priority **25**（不被外层 replace 影响），
+  只对 `ScreenRoute$MusicLibrary` 绘制；行本体直接反射调用宿主原生 11 参行，传入
+  `("统计", active, null, false, modifier, null, null, icon, composer, 0, 108)`。
+- 选中态抑制：统计页打开时在宿主唯一 Provider 调用点提供"未选中副本"的 `SidebarItemStyle`
+  （反射 10 参构造器），统计行内用 `LocalUnmaskedSidebarStyle` 恢复原样式；构造失败就只保留入口（可能双高亮）。
+- 入口互斥：`EntrySwitches.showSidebar`（可用且开启）优先，标题栏按钮自动让位；
+  两者都不可用时只能从配置页/浮钮打开。开关项 `showSidebarEntry` 默认关。
 
 ## 1. 结构判据（自动发现规则）
 
