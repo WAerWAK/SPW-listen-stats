@@ -43,6 +43,14 @@ import com.spwmods.waerwak.listenstats.ui.MissingState
 import com.spwmods.waerwak.listenstats.ui.SaltDesign
 import java.time.LocalDate
 
+/** 榜单日期范围格式：YY/MM/DD - YY/MM/DD */
+private val RANGE_FORMAT =
+    java.time.format.DateTimeFormatter.ofPattern("yy/MM/dd", java.util.Locale.ROOT)
+
+private fun formatRange(start: LocalDate, end: LocalDate): String {
+    return RANGE_FORMAT.format(start) + " - " + RANGE_FORMAT.format(end)
+}
+
 /** 榜单时长列：按「信息 → 显示 → 榜单时长用 h:mm:ss」决定格式 */
 private fun formatRankDuration(ms: Long): String {
     return if (OverlayInjection.hmsRanking.value) formatHms(ms) else formatMs(ms)
@@ -55,6 +63,8 @@ internal fun RankingTab(tick: Long) {
     var sortKey by remember { mutableStateOf(0) }
     var asc by remember { mutableStateOf(false) }
     var range by remember { mutableStateOf(0) }
+    // 月榜/周榜的日期口径：0 = 最近一月/一周；1 = 按日期的本月/本周
+    var periodMode by remember { mutableStateOf(0) }
     var songsPage by remember { mutableStateOf(0) }
     var albumsPage by remember { mutableStateOf(0) }
     var artistsPage by remember { mutableStateOf(0) }
@@ -75,19 +85,21 @@ internal fun RankingTab(tick: Long) {
         }
     }
     val today = LocalDate.now()
-    val sinceDate: String? = when (range) {
-        1 -> today.minusDays(30).toString()
-        2 -> today.minusDays(7).toString()
+    // 最近一度：往前 30 / 7 天；按日期的本月/本周：从 1 号 / 本周一开始
+    val periodStart: LocalDate? = when (range) {
+        1 -> if (periodMode == 0) today.minusDays(30) else today.withDayOfMonth(1)
+        2 -> if (periodMode == 0) today.minusDays(7) else today.with(java.time.DayOfWeek.MONDAY)
         else -> null
     }
+    val sinceDate: String? = if (periodStart == null) null else periodStart.toString()
 
     Column(Modifier.fillMaxWidth()) {
         // 上排：榜单切换（3/5）+ 搜索框（2/5）
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(3f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                RangeTab("总榜", range == 0, Modifier.weight(1f)) { range = 0; songsPage = 0; albumsPage = 0; artistsPage = 0 }
-                RangeTab("月榜", range == 1, Modifier.weight(1f)) { range = 1; songsPage = 0; albumsPage = 0; artistsPage = 0 }
-                RangeTab("周榜", range == 2, Modifier.weight(1f)) { range = 2; songsPage = 0; albumsPage = 0; artistsPage = 0 }
+                RangeTab("总榜", range == 0, Modifier.weight(1f)) { range = 0; periodMode = 0; songsPage = 0; albumsPage = 0; artistsPage = 0 }
+                RangeTab("月榜", range == 1, Modifier.weight(1f)) { range = 1; periodMode = 0; songsPage = 0; albumsPage = 0; artistsPage = 0 }
+                RangeTab("周榜", range == 2, Modifier.weight(1f)) { range = 2; periodMode = 0; songsPage = 0; albumsPage = 0; artistsPage = 0 }
             }
             Spacer(Modifier.width(10.dp))
             Box(Modifier.weight(2f)) {
@@ -102,8 +114,23 @@ internal fun RankingTab(tick: Long) {
                 UnderlineTab("专辑", kind == 1, Modifier.weight(1f), height = 32.dp) { kind = 1; albumsPage = 0 }
                 UnderlineTab("艺术家", kind == 2, Modifier.weight(1f), height = 32.dp) { kind = 2; artistsPage = 0 }
             }
-            // 视图切换固定占 2/5，其余留白（与删除排序按钮前的宽度一致）
-            Spacer(Modifier.weight(3f))
+            // 视图切换固定占 2/5；右侧显示当前榜单的具体日期范围（月/周榜可点切换口径）
+            Spacer(Modifier.weight(1f))
+            if (periodStart != null) {
+                val p = LocalSaltPalette.current
+                Surface(
+                    onClick = { periodMode = if (periodMode == 0) 1 else 0 },
+                    color = Color.Transparent,
+                    shape = SaltDesign.shapeSmall
+                ) {
+                    Text(
+                        formatRange(periodStart, today),
+                        fontSize = SaltDesign.fontSizeSub,
+                        color = if (periodMode == 0) p.subText else p.highlight,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
         }
         Spacer(Modifier.height(10.dp))
         // 点同一列切换升降序；换列时用该列的默认方向（名称升序、其余降序）

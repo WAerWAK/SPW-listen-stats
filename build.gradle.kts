@@ -7,8 +7,8 @@ plugins {
 }
 
 group = "com.spwmods.waerwak.listenstats"
-// 1.5.2.2：开发版（概览列表双击播放/点击详情/悬浮背景，分组详情可点进曲目详情，双击阈值 200ms）
-version = "1.5.2.2"
+// 1.5.2.3：开发版（月/周榜显示具体日期范围并可切换口径）
+version = "1.5.2.3"
 
 val pluginId = "com.spwmods.waerwak.listenstats"
 val pluginVersion = version.toString()
