@@ -23,8 +23,8 @@ import java.util.function.Consumer
  * 状态统一在宿主界面线程（EDT）更新：Compose 状态只能在那里写。
  * 开关只控制"是否绘制入口"，hook 本身常驻（不因开关反复注册/卸载）。
  *
- * 侧栏入口与标题栏按钮互斥：侧栏可用且开启时显示侧栏，否则回落到标题栏（都不行就靠配置页入口）。
- * 浮钮独立，不参与互斥。
+ * 侧栏入口、标题栏按钮、悬浮圆钮三个开关互相独立（全开就三个都有）：
+ * 用户要的就是“开关=真相”，不再做互斥让位。
  */
 @OptIn(UnstableSpwWorkshopApi::class)
 object EntrySwitches {
@@ -61,8 +61,8 @@ object EntrySwitches {
     /** 实际是否显示左侧栏入口 */
     val showSidebar: Boolean get() = sidebarReady && sidebarRequested
 
-    /** 实际是否显示标题栏按钮（侧栏真的画出来了才让位） */
-    val showTitlebar: Boolean get() = titlebarReady && titlebarRequested && !sidebarShown
+    /** 实际是否显示标题栏按钮（与侧栏互不影响，三个入口各自独立开关） */
+    val showTitlebar: Boolean get() = titlebarReady && titlebarRequested
 
     @Volatile
     private var alive = false
