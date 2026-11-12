@@ -231,13 +231,7 @@ src/main/kotlin/com/spwmods/waerwak/listenstats/
 
 ## 致谢
 
-本项目的部分实现思路来自同类插件 [Jethuit/SPW-Listen-Stats](https://github.com/Jethuit/SPW-Listen-Stats)：
-
-- 宿主界面注入点的结构发现（不写死混淆名）、句柄回滚与注入点缓存的做法
-- 左侧栏原生入口的接入方式（原生行布局 + 样式作用域，含选中态处理）
-- 配置页分组与“打开插件配置”等交互参考
-
-代码为独立实现，未直接拷贝其源码；上述参考均已在 `docs/hook-targets.md` 与注释中注明。
+本项目的部分实现思路来自同类插件 [Jethuit/SPW-Listen-Stats](https://github.com/Jethuit/SPW-Listen-Stats)。
 
 ---
 

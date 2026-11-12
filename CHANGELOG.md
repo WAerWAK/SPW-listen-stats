@@ -37,7 +37,7 @@
 - 基于 Salt Player for Windows **1.19.3**（1.19.0 / 1.19.1 仍可用）；宿主升级后若界面结构变化，入口会自动降级并在诊断里说明
 - 数据格式、备份格式、统计口径不变，旧数据与旧备份可直接使用
 - 旧版「悬浮按钮-卸载」的状态会自动迁移到新开关
-- 感谢 [Jethuit/SPW-Listen-Stats](https://github.com/Jethuit/SPW-Listen-Stats)：注入点结构发现、句柄回滚与缓存思路、左侧栏接入与界面设计参考，很多细节是从这个同类插件上学来的
+- 感谢 [Jethuit/SPW-Listen-Stats](https://github.com/Jethuit/SPW-Listen-Stats) 提供的实现思路参考
 
 ## [1.5.1] - 2026-11-09
 
