@@ -114,21 +114,23 @@ internal fun RankingTab(tick: Long) {
                 UnderlineTab("专辑", kind == 1, Modifier.weight(1f), height = 32.dp) { kind = 1; albumsPage = 0 }
                 UnderlineTab("艺术家", kind == 2, Modifier.weight(1f), height = 32.dp) { kind = 2; artistsPage = 0 }
             }
-            // 视图切换固定占 2/5；右侧显示当前榜单的具体日期范围（月/周榜可点切换口径）
-            Spacer(Modifier.weight(1f))
-            if (periodStart != null) {
-                val p = LocalSaltPalette.current
-                Surface(
-                    onClick = { periodMode = if (periodMode == 0) 1 else 0 },
-                    color = Color.Transparent,
-                    shape = SaltDesign.shapeSmall
-                ) {
-                    Text(
-                        formatRange(periodStart, today),
-                        fontSize = SaltDesign.fontSizeSub,
-                        color = if (periodMode == 0) p.subText else p.highlight,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
+            // 视图切换严格占 2/5（与以前一致）；日期放在剩下的 3/5 里右对齐，
+            // 不会因为有无日期而改变按钮行宽度
+            Box(Modifier.weight(3f), contentAlignment = Alignment.CenterEnd) {
+                if (periodStart != null) {
+                    val p = LocalSaltPalette.current
+                    Surface(
+                        onClick = { periodMode = if (periodMode == 0) 1 else 0 },
+                        color = Color.Transparent,
+                        shape = SaltDesign.shapeSmall
+                    ) {
+                        Text(
+                            formatRange(periodStart, today),
+                            fontSize = SaltDesign.fontSizeSub,
+                            color = if (periodMode == 0) p.subText else p.highlight,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
                 }
             }
         }
