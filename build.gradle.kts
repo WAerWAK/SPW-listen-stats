@@ -7,8 +7,8 @@ plugins {
 }
 
 group = "com.spwmods.waerwak.listenstats"
-// 1.5.2.3：开发版（月/周榜显示具体日期范围并可切换口径）
-version = "1.5.2.3"
+// 1.5.2：发布版（句柄/可选组/会话代数、配置分组与三开关、侧栏入口、面板直达、诊断报告、榜单日期范围）
+version = "1.5.2"
 
 val pluginId = "com.spwmods.waerwak.listenstats"
 val pluginVersion = version.toString()
